@@ -26,44 +26,90 @@ const db = getFirestore(app);
 
 // Rutas de colección para la base de datos
 const APP_ID = 'mapa-cecp-app';
-const getColPath = (colName) => `artifacts/${APP_ID}/public/data/${colName}`;
+const getStageColPath = (stageId, colName) => `artifacts/${APP_ID}/public/data/stages/${stageId}/${colName}`;
 
-// --- DATA INICIAL (Por si la base de datos está vacía) ---
-const defaultFlows = [
-  { id: 'oferta_abierta', label: 'Oferta Abierta', color: '#3b82f6' },
-  { id: 'proyectos', label: 'Proyectos y Licitaciones', color: '#8b5cf6' },
+const processStages = [
+  { id: 'formulacion', title: 'Formulación', description: 'Diseño y estructuración del proceso', color: 'from-blue-600 to-indigo-600' },
+  { id: 'ejecucion', title: 'Ejecución', description: 'Despliegue operativo y seguimiento', color: 'from-emerald-600 to-teal-600' },
+  { id: 'liquidacion', title: 'Liquidación', description: 'Cierre técnico, financiero y lecciones', color: 'from-fuchsia-600 to-rose-600' },
 ];
 
-const defaultPhases = [
-  { id: 'p1', title: '1. Búsqueda', color: '#3b82f6' },
-  { id: 'p2', title: '2. Viabilidad', color: '#6366f1' },
-  { id: 'p3', title: '3. Propuestas', color: '#a855f7' },
-  { id: 'p4', title: '4. Validación', color: '#d946ef' },
-  { id: 'p5', title: '5. Ejecución', color: '#ec4899' },
-  { id: 'p6', title: '6. Gestión', color: '#f43f5e' }
-];
-
-const defaultActivities = [
-  { id: 1, phaseId: 'p1', text: 'Seguimiento de tendencias en reportes', role: 'GT', duration: 'Permanente', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Tendencias', condition: '' },
-  { id: 2, phaseId: 'p1', text: 'Recepción de iniciativas individuales', role: 'GOA', duration: 'N/A', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Iniciativas', condition: '' },
-  { id: 3, phaseId: 'p1', text: 'Rastreo en plataformas (SECOP, Hermes)', role: 'GOM', duration: 'Diario', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Plataformas', condition: '' },
-  { id: 4, phaseId: 'p1', text: 'Reunión con empresa/entidad', role: 'GOM', duration: 'N/A', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Institucional', condition: '' },
-  { id: 5, phaseId: 'p1', text: 'Participación en Ferias/Eventos', role: 'GT', duration: 'Eventual', type: 'start', predecessors: [], flows: ['proyectos', 'oferta_abierta'], origin: 'Eventos', condition: '' },
-  { id: 6, phaseId: 'p2', text: 'Estudio de mercado y tendencias', role: 'GT', duration: '3 días', type: 'process', predecessors: [1, 2, 5], flows: ['oferta_abierta'], condition: '' },
-  { id: 7, phaseId: 'p2', text: 'Revisión Financiera Inicial', role: 'GA', duration: '2 días', type: 'process', predecessors: [2], flows: ['oferta_abierta'], condition: '' },
-  { id: 8, phaseId: 'p2', text: 'Revisión de pliegos de condiciones', role: 'GOM', duration: '1 día', type: 'decision', predecessors: [3, 4], flows: ['proyectos'], condition: '' },
-  { id: 9, phaseId: 'p3', text: 'Búsqueda de posible docente', role: 'GA', duration: 'Varía', type: 'process', predecessors: [6], flows: ['oferta_abierta'], condition: 'Si es viable' },
-  { id: 10, phaseId: 'p3', text: 'Creación ficha extensión', role: 'D', duration: '2 días', type: 'process', predecessors: [7, 9], flows: ['oferta_abierta'], condition: '' },
-  { id: 11, phaseId: 'p3', text: 'Manifestación de interés (Hermes)', role: 'GOM', duration: '1 día', type: 'process', predecessors: [8], flows: ['proyectos'], condition: 'Si cumple pliegos' },
-  { id: 12, phaseId: 'p3', text: 'Construcción propuesta técnica/económica', role: 'GOM', duration: '3-5 días', type: 'process', predecessors: [11], flows: ['proyectos'], condition: 'Si hay aval' },
-  { id: 13, phaseId: 'p4', text: 'Aprobación Comité de Extensión', role: 'DC', duration: 'Semanal', type: 'process', predecessors: [10], flows: ['oferta_abierta'], condition: '' },
-  { id: 14, phaseId: 'p4', text: 'Elaboración de Acuerdo/Contrato', role: 'GOM', duration: '5 días', type: 'process', predecessors: [12], flows: ['proyectos'], condition: 'Si ganamos licitación' },
-  { id: 15, phaseId: 'p5', text: 'Decisión: ¿Existe Proyecto en SAP?', role: 'Sistema', duration: 'N/A', type: 'decision', predecessors: [13, 14], flows: ['all'], condition: '' },
-  { id: 16, phaseId: 'p5', text: 'Creación de PAC y Resolución', role: 'GA', duration: '5 días', type: 'process', predecessors: [15], flows: ['all'], condition: 'NO existe' },
-  { id: 17, phaseId: 'p5', text: 'Formulación de Subproyectos', role: 'GP', duration: '3 días', type: 'process', predecessors: [15, 16], flows: ['all'], condition: 'SI existe / Ya creado' },
-  { id: 18, phaseId: 'p6', text: 'Campaña de expectativa', role: 'GT', duration: '15 días', type: 'process', predecessors: [17], flows: ['oferta_abierta'], condition: '' },
-  { id: 19, phaseId: 'p6', text: 'Ejecución del Proyecto (Inicio)', role: 'Director', duration: 'N/A', type: 'process', predecessors: [17], flows: ['proyectos'], condition: '' },
-];
+// --- DATA INICIAL POR ETAPA (Por si la base de datos está vacía) ---
+const stageDefaults = {
+  formulacion: {
+    flows: [
+      { id: 'oferta_abierta', label: 'Oferta Abierta', color: '#3b82f6' },
+      { id: 'proyectos', label: 'Proyectos y Licitaciones', color: '#8b5cf6' },
+    ],
+    phases: [
+      { id: 'p1', title: '1. Búsqueda', color: '#3b82f6' },
+      { id: 'p2', title: '2. Viabilidad', color: '#6366f1' },
+      { id: 'p3', title: '3. Propuestas', color: '#a855f7' },
+      { id: 'p4', title: '4. Validación', color: '#d946ef' },
+      { id: 'p5', title: '5. Ejecución', color: '#ec4899' },
+      { id: 'p6', title: '6. Gestión', color: '#f43f5e' }
+    ],
+    activities: [
+      { id: 1, phaseId: 'p1', text: 'Seguimiento de tendencias en reportes', role: 'GT', duration: 'Permanente', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Tendencias', condition: '' },
+      { id: 2, phaseId: 'p1', text: 'Recepción de iniciativas individuales', role: 'GOA', duration: 'N/A', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Iniciativas', condition: '' },
+      { id: 3, phaseId: 'p1', text: 'Rastreo en plataformas (SECOP, Hermes)', role: 'GOM', duration: 'Diario', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Plataformas', condition: '' },
+      { id: 4, phaseId: 'p1', text: 'Reunión con empresa/entidad', role: 'GOM', duration: 'N/A', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Institucional', condition: '' },
+      { id: 5, phaseId: 'p1', text: 'Participación en Ferias/Eventos', role: 'GT', duration: 'Eventual', type: 'start', predecessors: [], flows: ['proyectos', 'oferta_abierta'], origin: 'Eventos', condition: '' },
+      { id: 6, phaseId: 'p2', text: 'Estudio de mercado y tendencias', role: 'GT', duration: '3 días', type: 'process', predecessors: [1, 2, 5], flows: ['oferta_abierta'], condition: '' },
+      { id: 7, phaseId: 'p2', text: 'Revisión Financiera Inicial', role: 'GA', duration: '2 días', type: 'process', predecessors: [2], flows: ['oferta_abierta'], condition: '' },
+      { id: 8, phaseId: 'p2', text: 'Revisión de pliegos de condiciones', role: 'GOM', duration: '1 día', type: 'decision', predecessors: [3, 4], flows: ['proyectos'], condition: '' },
+      { id: 9, phaseId: 'p3', text: 'Búsqueda de posible docente', role: 'GA', duration: 'Varía', type: 'process', predecessors: [6], flows: ['oferta_abierta'], condition: 'Si es viable' },
+      { id: 10, phaseId: 'p3', text: 'Creación ficha extensión', role: 'D', duration: '2 días', type: 'process', predecessors: [7, 9], flows: ['oferta_abierta'], condition: '' },
+      { id: 11, phaseId: 'p3', text: 'Manifestación de interés (Hermes)', role: 'GOM', duration: '1 día', type: 'process', predecessors: [8], flows: ['proyectos'], condition: 'Si cumple pliegos' },
+      { id: 12, phaseId: 'p3', text: 'Construcción propuesta técnica/económica', role: 'GOM', duration: '3-5 días', type: 'process', predecessors: [11], flows: ['proyectos'], condition: 'Si hay aval' },
+      { id: 13, phaseId: 'p4', text: 'Aprobación Comité de Extensión', role: 'DC', duration: 'Semanal', type: 'process', predecessors: [10], flows: ['oferta_abierta'], condition: '' },
+      { id: 14, phaseId: 'p4', text: 'Elaboración de Acuerdo/Contrato', role: 'GOM', duration: '5 días', type: 'process', predecessors: [12], flows: ['proyectos'], condition: 'Si ganamos licitación' },
+      { id: 15, phaseId: 'p5', text: 'Decisión: ¿Existe Proyecto en SAP?', role: 'Sistema', duration: 'N/A', type: 'decision', predecessors: [13, 14], flows: ['all'], condition: '' },
+      { id: 16, phaseId: 'p5', text: 'Creación de PAC y Resolución', role: 'GA', duration: '5 días', type: 'process', predecessors: [15], flows: ['all'], condition: 'NO existe' },
+      { id: 17, phaseId: 'p5', text: 'Formulación de Subproyectos', role: 'GP', duration: '3 días', type: 'process', predecessors: [15, 16], flows: ['all'], condition: 'SI existe / Ya creado' },
+      { id: 18, phaseId: 'p6', text: 'Campaña de expectativa', role: 'GT', duration: '15 días', type: 'process', predecessors: [17], flows: ['oferta_abierta'], condition: '' },
+      { id: 19, phaseId: 'p6', text: 'Ejecución del Proyecto (Inicio)', role: 'Director', duration: 'N/A', type: 'process', predecessors: [17], flows: ['proyectos'], condition: '' },
+    ],
+  },
+  ejecucion: {
+    flows: [
+      { id: 'academica', label: 'Ejecución Académica', color: '#0ea5e9' },
+      { id: 'administrativa', label: 'Ejecución Administrativa', color: '#14b8a6' },
+    ],
+    phases: [
+      { id: 'e1', title: '1. Alistamiento', color: '#0ea5e9' },
+      { id: 'e2', title: '2. Operación', color: '#14b8a6' },
+      { id: 'e3', title: '3. Control', color: '#22c55e' },
+      { id: 'e4', title: '4. Cierre Operativo', color: '#10b981' },
+    ],
+    activities: [
+      { id: 1, phaseId: 'e1', text: 'Reunión de inicio y plan de trabajo', role: 'Director', duration: '1 día', type: 'start', predecessors: [], flows: ['all'], origin: '', condition: '' },
+      { id: 2, phaseId: 'e1', text: 'Asignación de equipo y recursos', role: 'GA', duration: '2 días', type: 'process', predecessors: [1], flows: ['administrativa'], origin: '', condition: '' },
+      { id: 3, phaseId: 'e2', text: 'Ejecución de actividades académicas', role: 'GP', duration: 'Variable', type: 'process', predecessors: [1], flows: ['academica'], origin: '', condition: '' },
+      { id: 4, phaseId: 'e2', text: 'Gestión contractual y compras', role: 'GOM', duration: 'Semanal', type: 'process', predecessors: [2], flows: ['administrativa'], origin: '', condition: '' },
+      { id: 5, phaseId: 'e3', text: 'Seguimiento de indicadores', role: 'GT', duration: 'Quincenal', type: 'decision', predecessors: [3, 4], flows: ['all'], origin: '', condition: 'Si hay desviaciones' },
+      { id: 6, phaseId: 'e4', text: 'Informe final de ejecución', role: 'DC', duration: '3 días', type: 'process', predecessors: [5], flows: ['all'], origin: '', condition: '' },
+    ],
+  },
+  liquidacion: {
+    flows: [
+      { id: 'financiero', label: 'Cierre Financiero', color: '#a855f7' },
+      { id: 'tecnico', label: 'Cierre Técnico', color: '#ec4899' },
+    ],
+    phases: [
+      { id: 'l1', title: '1. Consolidación', color: '#a855f7' },
+      { id: 'l2', title: '2. Validación', color: '#d946ef' },
+      { id: 'l3', title: '3. Formalización', color: '#ec4899' },
+    ],
+    activities: [
+      { id: 1, phaseId: 'l1', text: 'Consolidar soportes técnicos y financieros', role: 'GA', duration: '4 días', type: 'start', predecessors: [], flows: ['all'], origin: '', condition: '' },
+      { id: 2, phaseId: 'l1', text: 'Verificación documental de cumplimiento', role: 'GCA', duration: '2 días', type: 'process', predecessors: [1], flows: ['tecnico'], origin: '', condition: '' },
+      { id: 3, phaseId: 'l2', text: 'Conciliación de ejecución presupuestal', role: 'GA', duration: '3 días', type: 'process', predecessors: [1], flows: ['financiero'], origin: '', condition: '' },
+      { id: 4, phaseId: 'l2', text: 'Decisión: ¿Se requieren ajustes?', role: 'Sistema', duration: 'N/A', type: 'decision', predecessors: [2, 3], flows: ['all'], origin: '', condition: '' },
+      { id: 5, phaseId: 'l3', text: 'Firma de acta de liquidación', role: 'Director', duration: '1 día', type: 'process', predecessors: [4], flows: ['all'], origin: '', condition: 'Sin ajustes pendientes' },
+    ],
+  }
+};
 
 const availableRoles = ['GT', 'GA', 'GOM', 'GCA', 'DC', 'GP', 'Director', 'Sistema'];
 
@@ -92,6 +138,7 @@ const getPhaseHexColor = (phase) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('diagram_node');
+  const [activeStage, setActiveStage] = useState('formulacion');
   
   // Estados de Base de Datos
   const [phases, setPhases] = useState([]);
@@ -115,7 +162,7 @@ export default function App() {
   
   const nodeRefs = useRef({});
   const containerRef = useRef(null);
-  const initializedRef = useRef(false);
+  const initializedRef = useRef({});
 
   // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
@@ -150,41 +197,41 @@ export default function App() {
 
     const setupDatabase = async () => {
       // Escuchar Rutas
-      const unsubFlows = onSnapshot(collection(db, getColPath('flows')), (snapshot) => {
+      const stageColPath = (colName) => getStageColPath(activeStage, colName);
+      const stageDefaultsData = stageDefaults[activeStage];
+
+      const unsubFlows = onSnapshot(collection(db, stageColPath('flows')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
-        if (data.length === 0 && !initializedRef.current) {
-           data = defaultFlows;
+        if (data.length === 0 && !initializedRef.current[activeStage]) {
+           data = stageDefaultsData.flows;
         }
         setFlows(data);
       }, (error) => console.error(error));
 
       // Escuchar Fases
-      const unsubPhases = onSnapshot(collection(db, getColPath('phases')), (snapshot) => {
+      const unsubPhases = onSnapshot(collection(db, stageColPath('phases')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
-        // Ordenar fases por título para que se vean correctas (1., 2., 3.)
         data.sort((a, b) => a.title.localeCompare(b.title));
-        if (data.length === 0 && !initializedRef.current) {
-           data = defaultPhases;
+        if (data.length === 0 && !initializedRef.current[activeStage]) {
+           data = stageDefaultsData.phases;
         }
         setPhases(data);
       }, (error) => console.error(error));
 
       // Escuchar Actividades
-      const unsubActs = onSnapshot(collection(db, getColPath('activities')), async (snapshot) => {
+      const unsubActs = onSnapshot(collection(db, stageColPath('activities')), async (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
-        
-        // --- INICIALIZACIÓN POR DEFECTO ---
-        // Si la base de datos está vacía, la poblamos por primera y única vez.
-        if (data.length === 0 && !initializedRef.current) {
-           initializedRef.current = true;
+
+        if (data.length === 0 && !initializedRef.current[activeStage]) {
+           initializedRef.current[activeStage] = true;
            const batch = writeBatch(db);
-           defaultFlows.forEach(f => batch.set(doc(db, getColPath('flows'), f.id), f));
-           defaultPhases.forEach(p => batch.set(doc(db, getColPath('phases'), p.id), p));
-           defaultActivities.forEach(a => batch.set(doc(db, getColPath('activities'), a.id.toString()), a));
+           stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
+           stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
+           stageDefaultsData.activities.forEach(a => batch.set(doc(db, stageColPath('activities'), a.id.toString()), a));
            await batch.commit();
-           data = defaultActivities;
+           data = stageDefaultsData.activities;
         }
-        
+
         setActivities(data);
         setIsLoading(false);
       }, (error) => console.error(error));
@@ -194,7 +241,7 @@ export default function App() {
 
     const cleanup = setupDatabase();
     return () => cleanup;
-  }, [user]);
+  }, [user, activeStage]);
 
 
   // --- CALCULO DE LÍNEAS ROBUSTO ---
@@ -296,6 +343,17 @@ export default function App() {
       } else { setAuthError('Contraseña incorrecta'); }
   };
 
+  const handleStageChange = (stageId) => {
+    setIsLoading(true);
+    setActiveStage(stageId);
+    setSelectedActivityId(null);
+    setLines([]);
+    setIsEditingActivity(null);
+    setTempFilters({ flow: 'all', role: 'all' });
+    setActiveFilters({ flow: 'all', role: 'all' });
+    setFormData({ text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+  };
+
   const applyFilters = () => { setActiveFilters(tempFilters); setSelectedActivityId(null); };
   const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setSelectedActivityId(null); };
 
@@ -342,14 +400,14 @@ export default function App() {
           message: `¿Estás seguro de que deseas eliminar la actividad #${id}?`,
           onConfirm: async () => {
               // 1. Borrar actividad principal
-              await deleteDoc(doc(db, getColPath('activities'), id.toString()));
+              await deleteDoc(doc(db, getStageColPath(activeStage, 'activities'), id.toString()));
               
               // 2. Limpiar dependencias en otras actividades
               const batch = writeBatch(db);
               activities.forEach(a => {
                   if (a.predecessors.includes(id)) {
                       const updatedPredecessors = a.predecessors.filter(pid => pid !== id);
-                      batch.update(doc(db, getColPath('activities'), a.id.toString()), { predecessors: updatedPredecessors });
+                      batch.update(doc(db, getStageColPath(activeStage, 'activities'), a.id.toString()), { predecessors: updatedPredecessors });
                   }
               });
               await batch.commit();
@@ -367,9 +425,9 @@ export default function App() {
           message: '¡Atención! Al borrar esta fase, también se eliminarán TODAS las actividades que pertenecen a ella.',
           onConfirm: async () => {
               const batch = writeBatch(db);
-              batch.delete(doc(db, getColPath('phases'), id));
+              batch.delete(doc(db, getStageColPath(activeStage, 'phases'), id));
               activities.forEach(a => {
-                  if (a.phaseId === id) batch.delete(doc(db, getColPath('activities'), a.id.toString()));
+                  if (a.phaseId === id) batch.delete(doc(db, getStageColPath(activeStage, 'activities'), a.id.toString()));
               });
               await batch.commit();
               setConfirmDialog({ isOpen: false });
@@ -384,11 +442,11 @@ export default function App() {
           message: '¿Borrar esta ruta? Las actividades seguirán existiendo, pero perderán su asignación a este flujo.',
           onConfirm: async () => {
               const batch = writeBatch(db);
-              batch.delete(doc(db, getColPath('flows'), id));
+              batch.delete(doc(db, getStageColPath(activeStage, 'flows'), id));
               activities.forEach(a => {
                   if (a.flows.includes(id)) {
                       const updatedFlows = a.flows.filter(fid => fid !== id);
-                      batch.update(doc(db, getColPath('activities'), a.id.toString()), { flows: updatedFlows });
+                      batch.update(doc(db, getStageColPath(activeStage, 'activities'), a.id.toString()), { flows: updatedFlows });
                   }
               });
               await batch.commit();
@@ -400,25 +458,25 @@ export default function App() {
   const addPhase = async () => {
      const newId = `p${Date.now()}`;
      const newPhase = { id: newId, title: 'Nueva Fase', color: '#3b82f6' };
-     await setDoc(doc(db, getColPath('phases'), newId), newPhase);
+     await setDoc(doc(db, getStageColPath(activeStage, 'phases'), newId), newPhase);
   };
 
   const addFlow = async () => {
       const newId = `ruta_${Date.now()}`;
       const newFlow = { id: newId, label: 'Nueva Ruta', color: '#64748b' };
-      await setDoc(doc(db, getColPath('flows'), newId), newFlow);
+      await setDoc(doc(db, getStageColPath(activeStage, 'flows'), newId), newFlow);
   };
 
   const updatePhaseTitle = async (id, newTitle) => {
-      await setDoc(doc(db, getColPath('phases'), id), { title: newTitle }, { merge: true });
+      await setDoc(doc(db, getStageColPath(activeStage, 'phases'), id), { title: newTitle }, { merge: true });
   };
 
   const updatePhaseColor = async (id, newColor) => {
-      await setDoc(doc(db, getColPath('phases'), id), { color: newColor }, { merge: true });
+      await setDoc(doc(db, getStageColPath(activeStage, 'phases'), id), { color: newColor }, { merge: true });
   };
 
   const updateFlowLabel = async (id, newLabel) => {
-      await setDoc(doc(db, getColPath('flows'), id), { label: newLabel }, { merge: true });
+      await setDoc(doc(db, getStageColPath(activeStage, 'flows'), id), { label: newLabel }, { merge: true });
   };
   
   const handleSaveActivity = async () => {
@@ -429,7 +487,7 @@ export default function App() {
     const docId = isEditingActivity ? isEditingActivity.toString() : (Math.max(0, ...activities.map(a => a.id)) + 1).toString();
     newActivity.id = parseInt(docId);
 
-    await setDoc(doc(db, getColPath('activities'), docId), newActivity);
+    await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
     
     setIsEditingActivity(null);
     setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
@@ -551,41 +609,77 @@ export default function App() {
       )}
 
       {/* HEADER */}
-      <header className="bg-white border-b border-slate-200 p-3 shadow-sm z-40 flex flex-col xl:flex-row justify-between items-center gap-3">
-        <div className="flex items-center gap-3">
-            <div className="p-2 bg-slate-900 rounded-lg shadow-lg"><Network className="w-5 h-5 text-white" /></div>
-            <div><h1 className="text-base font-bold text-slate-900 leading-tight">Mapa de Procesos</h1><p className="text-[10px] text-slate-500 uppercase tracking-wider">Gestión CECP</p></div>
-        </div>
+      <header className="bg-white border-b border-slate-200 px-4 py-3 shadow-sm z-40">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-900 rounded-lg shadow-lg"><Network className="w-5 h-5 text-white" /></div>
+              <div>
+                <h1 className="text-base font-bold text-slate-900 leading-tight">Mapa de Procesos</h1>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider">Gestión CECP · {processStages.find(stage => stage.id === activeStage)?.title}</p>
+              </div>
+            </div>
 
-        {/* FILTROS */}
-        <div className="flex flex-wrap items-center justify-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 w-full xl:w-auto shadow-inner">
-          <div className="flex items-center gap-2 px-2 border-r border-slate-300">
-            <Filter className="w-4 h-4 text-blue-600" />
-            <select value={tempFilters.flow} onChange={(e) => setTempFilters({...tempFilters, flow: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-32 sm:w-40 truncate hover:text-blue-600 transition-colors">
-              <option value="all">Todas las Rutas</option>
-              {flows.map(f => <option key={f.id} value={f.id}>{f.label.replace('Ruta: ', '')}</option>)}
-            </select>
+            {/* NAVEGACIÓN PRINCIPAL */}
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 w-full xl:w-auto">
+              <button onClick={() => setActiveTab('diagram_node')} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all flex-1 xl:flex-none ${activeTab === 'diagram_node' ? 'bg-white text-blue-700 shadow ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}><Network className="w-3 h-3"/> Diagrama</button>
+              <button onClick={() => setActiveTab('diagram_list')} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all flex-1 xl:flex-none ${activeTab === 'diagram_list' ? 'bg-white text-blue-700 shadow ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}><Layout className="w-3 h-3"/> Lista</button>
+              <button onClick={handleEditorTabClick} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all flex-1 xl:flex-none ${activeTab === 'editor' ? 'bg-amber-100 text-amber-800 shadow ring-1 ring-amber-300' : 'text-slate-500 hover:text-slate-700'}`}>
+                {isAuthenticated ? <Edit2 className="w-3 h-3 text-amber-600"/> : <Lock className="w-3 h-3"/>} Editor
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2 px-2 border-r border-slate-300">
-            <Users className="w-4 h-4 text-purple-600" />
-            <select value={tempFilters.role} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-28 sm:w-32 truncate hover:text-purple-600 transition-colors">
-              <option value="all">Todos los Roles</option>
-              {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
-          <div className="flex gap-1 ml-auto sm:ml-0">
-            <button onClick={applyFilters} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-900 shadow-sm transition-transform active:scale-95">Filtrar</button>
-            <button onClick={clearFilters} className="bg-white text-slate-500 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-bold hover:text-red-600 hover:border-red-200 shadow-sm transition-transform active:scale-95"><RotateCcw className="w-3 h-3" /></button>
-          </div>
-        </div>
 
-        {/* TABS */}
-        <div className="flex gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 w-full xl:w-auto">
-          <button onClick={() => setActiveTab('diagram_node')} className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'diagram_node' ? 'bg-white text-blue-700 shadow ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}><Network className="w-3 h-3"/> Diagrama</button>
-          <button onClick={() => setActiveTab('diagram_list')} className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'diagram_list' ? 'bg-white text-blue-700 shadow ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}><Layout className="w-3 h-3"/> Lista</button>
-          <button onClick={handleEditorTabClick} className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'editor' ? 'bg-amber-100 text-amber-800 shadow ring-1 ring-amber-300' : 'text-slate-500 hover:text-slate-700'}`}>
-             {isAuthenticated ? <Edit2 className="w-3 h-3 text-amber-600"/> : <Lock className="w-3 h-3"/>} Editor
-          </button>
+          <div className="grid grid-cols-1 2xl:grid-cols-[1.15fr_0.85fr] gap-3">
+            {/* ETAPAS */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-inner">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2 pb-2">Etapas del proceso</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {processStages.map(stage => {
+                  const isActive = stage.id === activeStage;
+                  return (
+                    <button
+                      key={stage.id}
+                      onClick={() => handleStageChange(stage.id)}
+                      className={`text-left rounded-xl border p-2.5 transition-all ${isActive ? 'border-transparent text-white shadow-lg' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+                    >
+                      <div className={`rounded-lg p-2 ${isActive ? `bg-gradient-to-r ${stage.color}` : 'bg-slate-50'}`}>
+                        <p className={`text-xs font-extrabold uppercase tracking-wide ${isActive ? 'text-white/90' : 'text-slate-500'}`}>{stage.title}</p>
+                        <p className={`text-[10px] mt-1 ${isActive ? 'text-white/80' : 'text-slate-400'}`}>{stage.description}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* FILTROS */}
+            {activeTab !== 'editor' && (
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-inner">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2 pb-2">Filtros de visualización</p>
+                <div className="flex flex-wrap items-center gap-2 px-1">
+                  <div className="flex items-center gap-2 px-2 border-r border-slate-300">
+                    <Filter className="w-4 h-4 text-blue-600" />
+                    <select value={tempFilters.flow} onChange={(e) => setTempFilters({...tempFilters, flow: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-36 sm:w-44 truncate hover:text-blue-600 transition-colors">
+                      <option value="all">Todas las Rutas</option>
+                      {flows.map(f => <option key={f.id} value={f.id}>{f.label.replace('Ruta: ', '')}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2 px-2 border-r border-slate-300">
+                    <Users className="w-4 h-4 text-purple-600" />
+                    <select value={tempFilters.role} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-32 sm:w-36 truncate hover:text-purple-600 transition-colors">
+                      <option value="all">Todos los Roles</option>
+                      {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex gap-1 ml-auto sm:ml-0">
+                    <button onClick={applyFilters} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-900 shadow-sm transition-transform active:scale-95">Filtrar</button>
+                    <button onClick={clearFilters} className="bg-white text-slate-500 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-bold hover:text-red-600 hover:border-red-200 shadow-sm transition-transform active:scale-95"><RotateCcw className="w-3 h-3" /></button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
