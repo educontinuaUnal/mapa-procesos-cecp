@@ -1,37 +1,37 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { 
-  Layout, 
-  Plus, 
-  Trash2, 
-  Edit2, 
-  Save, 
-  X, 
-  GitBranch,
-  PlayCircle,
-  Clock,
-  Filter,
-  ArrowDown,
-  ArrowUp,
-  Map,
-  Layers,
-  CornerDownRight,
-  Route,
-  Search,
-  RotateCcw,
-  Users,
-  AlertTriangle,
-  Network,
-  Info,
-  CheckCircle2,
-  Lock,
-  Unlock
+  Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
+  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2
 } from 'lucide-react';
 
-// --- DATA INICIAL ---
+// --- FIREBASE IMPORTS ---
+import { initializeApp } from "firebase/app";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 
+// --- CONFIGURACIÓN DE FIREBASE ---
+const firebaseConfig = {
+  apiKey: "AIzaSyCmabKvkwXx6NYctn4jG-_GVYwcCJOl4-E",
+  authDomain: "mapa-cecp-db.firebaseapp.com",
+  projectId: "mapa-cecp-db",
+  storageBucket: "mapa-cecp-db.firebasestorage.app",
+  messagingSenderId: "1026122082021",
+  appId: "1:1026122082021:web:c46c4ed386683c58e5960c"
+};
+
+// Inicializar Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Rutas de colección para la base de datos
+const APP_ID = 'mapa-cecp-app';
+const getColPath = (colName) => `artifacts/${APP_ID}/public/data/${colName}`;
+
+// --- DATA INICIAL (Por si la base de datos está vacía) ---
 const defaultFlows = [
-  { id: 'oferta_abierta', label: 'Oferta Abierta', color: '#3b82f6' }, // Azul
-  { id: 'proyectos', label: 'Proyectos y Licitaciones', color: '#8b5cf6' }, // Violeta
+  { id: 'oferta_abierta', label: 'Oferta Abierta', color: '#3b82f6' },
+  { id: 'proyectos', label: 'Proyectos y Licitaciones', color: '#8b5cf6' },
 ];
 
 const defaultPhases = [
@@ -44,11 +44,11 @@ const defaultPhases = [
 ];
 
 const defaultActivities = [
-  { id: 1, phaseId: 'p1', text: 'Seguimiento de tendencias en reportes', role: 'GT', duration: 'Permanente', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Tendencias' },
-  { id: 2, phaseId: 'p1', text: 'Recepción de iniciativas individuales', role: 'GOA', duration: 'N/A', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Iniciativas' },
-  { id: 3, phaseId: 'p1', text: 'Rastreo en plataformas (SECOP, Hermes)', role: 'GOM', duration: 'Diario', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Plataformas' },
-  { id: 4, phaseId: 'p1', text: 'Reunión con empresa/entidad', role: 'GOM', duration: 'N/A', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Institucional' },
-  { id: 5, phaseId: 'p1', text: 'Participación en Ferias/Eventos', role: 'GT', duration: 'Eventual', type: 'start', predecessors: [], flows: ['proyectos', 'oferta_abierta'], origin: 'Eventos' },
+  { id: 1, phaseId: 'p1', text: 'Seguimiento de tendencias en reportes', role: 'GT', duration: 'Permanente', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Tendencias', condition: '' },
+  { id: 2, phaseId: 'p1', text: 'Recepción de iniciativas individuales', role: 'GOA', duration: 'N/A', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Iniciativas', condition: '' },
+  { id: 3, phaseId: 'p1', text: 'Rastreo en plataformas (SECOP, Hermes)', role: 'GOM', duration: 'Diario', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Plataformas', condition: '' },
+  { id: 4, phaseId: 'p1', text: 'Reunión con empresa/entidad', role: 'GOM', duration: 'N/A', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Institucional', condition: '' },
+  { id: 5, phaseId: 'p1', text: 'Participación en Ferias/Eventos', role: 'GT', duration: 'Eventual', type: 'start', predecessors: [], flows: ['proyectos', 'oferta_abierta'], origin: 'Eventos', condition: '' },
   { id: 6, phaseId: 'p2', text: 'Estudio de mercado y tendencias', role: 'GT', duration: '3 días', type: 'process', predecessors: [1, 2, 5], flows: ['oferta_abierta'], condition: '' },
   { id: 7, phaseId: 'p2', text: 'Revisión Financiera Inicial', role: 'GA', duration: '2 días', type: 'process', predecessors: [2], flows: ['oferta_abierta'], condition: '' },
   { id: 8, phaseId: 'p2', text: 'Revisión de pliegos de condiciones', role: 'GOM', duration: '1 día', type: 'decision', predecessors: [3, 4], flows: ['proyectos'], condition: '' },
@@ -78,45 +78,118 @@ const roleBadges = {
     'Sistema': 'bg-gray-100 text-gray-700',
 };
 
-const ADMIN_PASSWORD = "admin123"; // <-- Cambia la contraseña aquí si lo deseas
+const ADMIN_PASSWORD = "admin123";
 
-export default function ProcessManager() {
+export default function App() {
   const [activeTab, setActiveTab] = useState('diagram_node');
-  const [phases, setPhases] = useState(defaultPhases);
-  const [activities, setActivities] = useState(defaultActivities);
-  const [flows, setFlows] = useState(defaultFlows);
   
-  // --- ESTADO DE SEGURIDAD (PASSWORD) ---
+  // Estados de Base de Datos
+  const [phases, setPhases] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [flows, setFlows] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  
+  // Estados de Seguridad
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // --- ESTADO DE DIÁLOGOS (Reemplazo de window.confirm) ---
+  // Estados de Interfaz
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
-  
-  // --- ESTADO DE FILTROS ---
   const [tempFilters, setTempFilters] = useState({ flow: 'all', role: 'all' });
   const [activeFilters, setActiveFilters] = useState({ flow: 'all', role: 'all' });
-  
-  // Interacción Visual
   const [selectedActivityId, setSelectedActivityId] = useState(null);
   const [lines, setLines] = useState([]);
   
   const nodeRefs = useRef({});
   const containerRef = useRef(null);
+  const initializedRef = useRef(false);
 
-  // Edición
+  // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
   const [managementMode, setManagementMode] = useState('activities');
-  
   const [formData, setFormData] = useState({
     text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: ''
   });
 
+  // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try { 
+        await signInAnonymously(auth); 
+      } catch (error) { 
+        console.error("Error conectando a Firebase:", error); 
+        // Fallback para evitar bloqueo si la Autenticación Anónima no está habilitada
+        setUser({ uid: 'usuario-temporal-test' });
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const setupDatabase = async () => {
+      // Escuchar Rutas
+      const unsubFlows = onSnapshot(collection(db, getColPath('flows')), (snapshot) => {
+        let data = snapshot.docs.map(doc => doc.data());
+        if (data.length === 0 && !initializedRef.current) {
+           data = defaultFlows;
+        }
+        setFlows(data);
+      }, (error) => console.error(error));
+
+      // Escuchar Fases
+      const unsubPhases = onSnapshot(collection(db, getColPath('phases')), (snapshot) => {
+        let data = snapshot.docs.map(doc => doc.data());
+        // Ordenar fases por título para que se vean correctas (1., 2., 3.)
+        data.sort((a, b) => a.title.localeCompare(b.title));
+        if (data.length === 0 && !initializedRef.current) {
+           data = defaultPhases;
+        }
+        setPhases(data);
+      }, (error) => console.error(error));
+
+      // Escuchar Actividades
+      const unsubActs = onSnapshot(collection(db, getColPath('activities')), async (snapshot) => {
+        let data = snapshot.docs.map(doc => doc.data());
+        
+        // --- INICIALIZACIÓN POR DEFECTO ---
+        // Si la base de datos está vacía, la poblamos por primera y única vez.
+        if (data.length === 0 && !initializedRef.current) {
+           initializedRef.current = true;
+           const batch = writeBatch(db);
+           defaultFlows.forEach(f => batch.set(doc(db, getColPath('flows'), f.id), f));
+           defaultPhases.forEach(p => batch.set(doc(db, getColPath('phases'), p.id), p));
+           defaultActivities.forEach(a => batch.set(doc(db, getColPath('activities'), a.id.toString()), a));
+           await batch.commit();
+           data = defaultActivities;
+        }
+        
+        setActivities(data);
+        setIsLoading(false);
+      }, (error) => console.error(error));
+
+      return () => { unsubFlows(); unsubPhases(); unsubActs(); };
+    };
+
+    const cleanup = setupDatabase();
+    return () => cleanup;
+  }, [user]);
+
+
   // --- CALCULO DE LÍNEAS ROBUSTO ---
   const calculateLines = () => {
-    if (activeTab !== 'diagram_node' || !containerRef.current) return;
+    if (activeTab !== 'diagram_node' || !containerRef.current || activities.length === 0) return;
 
     const newLines = [];
     const containerRect = containerRef.current.getBoundingClientRect();
@@ -199,11 +272,7 @@ export default function ProcessManager() {
 
   // --- NAVEGACIÓN Y SEGURIDAD ---
   const handleEditorTabClick = () => {
-      if (isAuthenticated) {
-          setActiveTab('editor');
-      } else {
-          setShowAuthModal(true);
-      }
+      if (isAuthenticated) { setActiveTab('editor'); } else { setShowAuthModal(true); }
   };
 
   const handleLogin = (e) => {
@@ -214,16 +283,12 @@ export default function ProcessManager() {
           setAuthError('');
           setPasswordInput('');
           setActiveTab('editor');
-      } else {
-          setAuthError('Contraseña incorrecta');
-      }
+      } else { setAuthError('Contraseña incorrecta'); }
   };
 
-  // --- FILTROS & SELECCION ---
   const applyFilters = () => { setActiveFilters(tempFilters); setSelectedActivityId(null); };
   const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setSelectedActivityId(null); };
 
-  // --- TRAZABILIDAD ---
   const getDownstreamPath = (startId, allActs = activities) => {
     let path = new Set([startId]);
     let queue = [startId];
@@ -258,15 +323,27 @@ export default function ProcessManager() {
     return 'opacity-100';
   };
 
-  // --- CRUD SEGURO (CON MODALES PROPIOS) ---
+  // --- CRUD A FIREBASE (Guardado en Tiempo Real) ---
+
   const requestDeleteActivity = (id) => {
       setConfirmDialog({
           isOpen: true,
           title: 'Eliminar Actividad',
-          message: `¿Estás seguro de que deseas eliminar la actividad #${id}? Esta acción no se puede deshacer y eliminará las dependencias asociadas.`,
-          onConfirm: () => {
-              setActivities(prev => prev.filter(a => a.id !== id));
-              setActivities(prev => prev.map(a => ({ ...a, predecessors: a.predecessors.filter(pid => pid !== id) })));
+          message: `¿Estás seguro de que deseas eliminar la actividad #${id}?`,
+          onConfirm: async () => {
+              // 1. Borrar actividad principal
+              await deleteDoc(doc(db, getColPath('activities'), id.toString()));
+              
+              // 2. Limpiar dependencias en otras actividades
+              const batch = writeBatch(db);
+              activities.forEach(a => {
+                  if (a.predecessors.includes(id)) {
+                      const updatedPredecessors = a.predecessors.filter(pid => pid !== id);
+                      batch.update(doc(db, getColPath('activities'), a.id.toString()), { predecessors: updatedPredecessors });
+                  }
+              });
+              await batch.commit();
+              
               if (isEditingActivity === id) setIsEditingActivity(null);
               setConfirmDialog({ isOpen: false });
           }
@@ -277,10 +354,14 @@ export default function ProcessManager() {
       setConfirmDialog({
           isOpen: true,
           title: 'Eliminar Fase Completa',
-          message: '¡Atención! Al borrar esta fase, también se eliminarán TODAS las actividades que pertenecen a ella. ¿Deseas continuar?',
-          onConfirm: () => {
-              setPhases(prev => prev.filter(p => p.id !== id));
-              setActivities(prev => prev.filter(a => a.phaseId !== id));
+          message: '¡Atención! Al borrar esta fase, también se eliminarán TODAS las actividades que pertenecen a ella.',
+          onConfirm: async () => {
+              const batch = writeBatch(db);
+              batch.delete(doc(db, getColPath('phases'), id));
+              activities.forEach(a => {
+                  if (a.phaseId === id) batch.delete(doc(db, getColPath('activities'), a.id.toString()));
+              });
+              await batch.commit();
               setConfirmDialog({ isOpen: false });
           }
       });
@@ -291,48 +372,52 @@ export default function ProcessManager() {
           isOpen: true,
           title: 'Eliminar Ruta',
           message: '¿Borrar esta ruta? Las actividades seguirán existiendo, pero perderán su asignación a este flujo.',
-          onConfirm: () => {
-              setFlows(prev => prev.filter(f => f.id !== id));
-              setActivities(prev => prev.map(a => ({ ...a, flows: a.flows.filter(fid => fid !== id) })));
+          onConfirm: async () => {
+              const batch = writeBatch(db);
+              batch.delete(doc(db, getColPath('flows'), id));
+              activities.forEach(a => {
+                  if (a.flows.includes(id)) {
+                      const updatedFlows = a.flows.filter(fid => fid !== id);
+                      batch.update(doc(db, getColPath('activities'), a.id.toString()), { flows: updatedFlows });
+                  }
+              });
+              await batch.commit();
               setConfirmDialog({ isOpen: false });
           }
       });
   };
 
-  const addPhase = () => {
+  const addPhase = async () => {
      const newId = `p${Date.now()}`;
-     setPhases([...phases, { 
-       id: newId, 
-       title: 'Nueva Fase', 
-       color: 'bg-slate-100 border-slate-300 text-slate-800', 
-       nodeColor: 'bg-slate-500' 
-     }]);
+     const newPhase = { id: newId, title: 'Nueva Fase', color: 'bg-slate-100 border-slate-300 text-slate-800', nodeColor: 'bg-slate-500' };
+     await setDoc(doc(db, getColPath('phases'), newId), newPhase);
   };
 
-  const addFlow = () => {
-      const id = `ruta_${Date.now()}`;
-      setFlows([...flows, { id, label: 'Nueva Ruta', color: '#64748b' }]);
+  const addFlow = async () => {
+      const newId = `ruta_${Date.now()}`;
+      const newFlow = { id: newId, label: 'Nueva Ruta', color: '#64748b' };
+      await setDoc(doc(db, getColPath('flows'), newId), newFlow);
   };
 
-  const updatePhaseTitle = (id, newTitle) => {
-    setPhases(phases.map(p => p.id === id ? { ...p, title: newTitle } : p));
+  const updatePhaseTitle = async (id, newTitle) => {
+      await setDoc(doc(db, getColPath('phases'), id), { title: newTitle }, { merge: true });
   };
 
-  const updateFlowLabel = (id, newLabel) => {
-    setFlows(flows.map(f => f.id === id ? { ...f, label: newLabel } : f));
+  const updateFlowLabel = async (id, newLabel) => {
+      await setDoc(doc(db, getColPath('flows'), id), { label: newLabel }, { merge: true });
   };
   
-  const handleSaveActivity = () => {
+  const handleSaveActivity = async () => {
     let preds = formData.predecessors;
     if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
+    
     const newActivity = { ...formData, predecessors: preds };
-    if (isEditingActivity) {
-      setActivities(activities.map(a => a.id === isEditingActivity ? { ...newActivity, id: isEditingActivity } : a));
-      setIsEditingActivity(null);
-    } else {
-      const newId = Math.max(...activities.map(a => a.id), 0) + 1;
-      setActivities([...activities, { ...newActivity, id: newId }]);
-    }
+    const docId = isEditingActivity ? isEditingActivity.toString() : (Math.max(0, ...activities.map(a => a.id)) + 1).toString();
+    newActivity.id = parseInt(docId);
+
+    await setDoc(doc(db, getColPath('activities'), docId), newActivity);
+    
+    setIsEditingActivity(null);
     setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
   };
 
@@ -341,6 +426,16 @@ export default function ProcessManager() {
     setFormData({ ...activity, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
     setActiveTab('editor');
   };
+
+  // --- PANTALLA DE CARGA ---
+  if (isLoading) {
+      return (
+          <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50">
+              <Network className="w-12 h-12 text-blue-500 animate-pulse mb-4" />
+              <h2 className="text-slate-600 font-bold">Conectando con la base de datos...</h2>
+          </div>
+      );
+  }
 
   // --- COMPONENTES VISUALES ---
   const NodeCard = ({ activity }) => {
@@ -395,23 +490,20 @@ export default function ProcessManager() {
                       </div>
                   </div>
                   <h2 className="text-xl font-bold text-center text-slate-800 mb-2">Acceso Restringido</h2>
-                  <p className="text-sm text-center text-slate-500 mb-6">Ingresa la contraseña para acceder al editor de diagramas.</p>
+                  <p className="text-sm text-center text-slate-500 mb-6">Ingresa la contraseña para acceder al editor.</p>
                   
                   <form onSubmit={handleLogin} className="space-y-4">
                       <div>
                           <input 
-                              type="password" 
-                              autoFocus
-                              placeholder="Contraseña"
+                              type="password" autoFocus placeholder="Contraseña"
                               className={`w-full p-3 border rounded-lg focus:ring-2 focus:outline-none transition-all ${authError ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-                              value={passwordInput}
-                              onChange={(e) => setPasswordInput(e.target.value)}
+                              value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)}
                           />
                           {authError && <p className="text-xs text-red-500 mt-1 font-medium">{authError}</p>}
                       </div>
                       <div className="flex gap-3">
-                          <button type="button" onClick={() => { setShowAuthModal(false); setAuthError(''); setPasswordInput(''); }} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-lg font-bold hover:bg-slate-200 transition-colors">Cancelar</button>
-                          <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-bold shadow-lg hover:bg-blue-700 transition-colors flex justify-center items-center gap-2"><Unlock className="w-4 h-4"/> Entrar</button>
+                          <button type="button" onClick={() => { setShowAuthModal(false); setAuthError(''); setPasswordInput(''); }} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-lg font-bold hover:bg-slate-200">Cancelar</button>
+                          <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-bold shadow-lg hover:bg-blue-700 flex justify-center items-center gap-2"><Unlock className="w-4 h-4"/> Entrar</button>
                       </div>
                   </form>
               </div>
@@ -430,8 +522,8 @@ export default function ProcessManager() {
                   </div>
                   <p className="text-sm text-slate-600 mb-6">{confirmDialog.message}</p>
                   <div className="flex justify-end gap-3">
-                      <button onClick={() => setConfirmDialog({ isOpen: false })} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200 transition-colors">Cancelar</button>
-                      <button onClick={confirmDialog.onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold shadow-lg hover:bg-red-700 transition-colors">Sí, eliminar</button>
+                      <button onClick={() => setConfirmDialog({ isOpen: false })} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200">Cancelar</button>
+                      <button onClick={confirmDialog.onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold shadow-lg hover:bg-red-700">Sí, eliminar</button>
                   </div>
               </div>
           </div>
@@ -470,8 +562,6 @@ export default function ProcessManager() {
         <div className="flex gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 w-full xl:w-auto">
           <button onClick={() => setActiveTab('diagram_node')} className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'diagram_node' ? 'bg-white text-blue-700 shadow ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}><Network className="w-3 h-3"/> Diagrama</button>
           <button onClick={() => setActiveTab('diagram_list')} className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'diagram_list' ? 'bg-white text-blue-700 shadow ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}><Layout className="w-3 h-3"/> Lista</button>
-          
-          {/* BOTÓN EDITOR (CON CANDADO) */}
           <button onClick={handleEditorTabClick} className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-2 transition-all ${activeTab === 'editor' ? 'bg-amber-100 text-amber-800 shadow ring-1 ring-amber-300' : 'text-slate-500 hover:text-slate-700'}`}>
              {isAuthenticated ? <Edit2 className="w-3 h-3 text-amber-600"/> : <Lock className="w-3 h-3"/>} Editor
           </button>
@@ -483,11 +573,7 @@ export default function ProcessManager() {
         
         {/* DIAGRAMA NODOS */}
         {activeTab === 'diagram_node' && (
-          <div 
-            className="flex-1 h-full overflow-auto relative cursor-grab active:cursor-grabbing" 
-            ref={containerRef}
-            onClick={() => setSelectedActivityId(null)} // Des-seleccionar al hacer click fuera
-          >
+          <div className="flex-1 h-full overflow-auto relative cursor-grab active:cursor-grabbing" ref={containerRef} onClick={() => setSelectedActivityId(null)}>
             <div className="absolute inset-0 pointer-events-none opacity-[0.4] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:24px_24px] z-0 min-w-max min-h-full"></div>
 
             <svg className="absolute top-0 left-0 w-full h-full min-w-max min-h-max pointer-events-none z-10 overflow-visible">
