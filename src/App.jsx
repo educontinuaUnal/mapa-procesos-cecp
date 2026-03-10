@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { 
   Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
-  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2
+  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -35,12 +35,12 @@ const defaultFlows = [
 ];
 
 const defaultPhases = [
-  { id: 'p1', title: '1. Búsqueda', color: 'bg-blue-100 border-blue-300 text-blue-800', nodeColor: 'bg-blue-500' },
-  { id: 'p2', title: '2. Viabilidad', color: 'bg-indigo-100 border-indigo-300 text-indigo-800', nodeColor: 'bg-indigo-500' },
-  { id: 'p3', title: '3. Propuestas', color: 'bg-purple-100 border-purple-300 text-purple-800', nodeColor: 'bg-purple-500' },
-  { id: 'p4', title: '4. Validación', color: 'bg-fuchsia-100 border-fuchsia-300 text-fuchsia-800', nodeColor: 'bg-fuchsia-500' },
-  { id: 'p5', title: '5. Ejecución', color: 'bg-pink-100 border-pink-300 text-pink-800', nodeColor: 'bg-pink-500' },
-  { id: 'p6', title: '6. Gestión', color: 'bg-rose-100 border-rose-300 text-rose-800', nodeColor: 'bg-rose-500' }
+  { id: 'p1', title: '1. Búsqueda', color: '#3b82f6' },
+  { id: 'p2', title: '2. Viabilidad', color: '#6366f1' },
+  { id: 'p3', title: '3. Propuestas', color: '#a855f7' },
+  { id: 'p4', title: '4. Validación', color: '#d946ef' },
+  { id: 'p5', title: '5. Ejecución', color: '#ec4899' },
+  { id: 'p6', title: '6. Gestión', color: '#f43f5e' }
 ];
 
 const defaultActivities = [
@@ -79,6 +79,16 @@ const roleBadges = {
 };
 
 const ADMIN_PASSWORD = "admin123";
+
+// Función inteligente para migrar colores viejos de la base de datos a los nuevos códigos HEX
+const getPhaseHexColor = (phase) => {
+    if (!phase) return '#cbd5e1';
+    if (phase.color && phase.color.startsWith('#')) return phase.color;
+    // Compatibilidad con la versión anterior guardada en tu Firebase
+    const oldColors = { 'bg-blue-100': '#3b82f6', 'bg-indigo-100': '#6366f1', 'bg-purple-100': '#a855f7', 'bg-fuchsia-100': '#d946ef', 'bg-pink-100': '#ec4899', 'bg-rose-100': '#f43f5e' };
+    const matched = phase.color ? Object.keys(oldColors).find(key => phase.color.includes(key)) : null;
+    return matched ? oldColors[matched] : '#3b82f6';
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('diagram_node');
@@ -389,7 +399,7 @@ export default function App() {
 
   const addPhase = async () => {
      const newId = `p${Date.now()}`;
-     const newPhase = { id: newId, title: 'Nueva Fase', color: 'bg-slate-100 border-slate-300 text-slate-800', nodeColor: 'bg-slate-500' };
+     const newPhase = { id: newId, title: 'Nueva Fase', color: '#3b82f6' };
      await setDoc(doc(db, getColPath('phases'), newId), newPhase);
   };
 
@@ -401,6 +411,10 @@ export default function App() {
 
   const updatePhaseTitle = async (id, newTitle) => {
       await setDoc(doc(db, getColPath('phases'), id), { title: newTitle }, { merge: true });
+  };
+
+  const updatePhaseColor = async (id, newColor) => {
+      await setDoc(doc(db, getColPath('phases'), id), { color: newColor }, { merge: true });
   };
 
   const updateFlowLabel = async (id, newLabel) => {
@@ -444,11 +458,17 @@ export default function App() {
     if (opacityClass === 'hidden') return null;
     
     const phaseObj = phases.find(p => p.id === activity.phaseId);
-    const nodeColor = phaseObj ? phaseObj.nodeColor : 'bg-slate-500';
+    const phaseColor = getPhaseHexColor(phaseObj);
     const isDecision = activity.type === 'decision';
+    
     const shapeClasses = isDecision 
-        ? 'w-10 h-10 rotate-45 bg-gray-400 border-2 border-gray-500 rounded-sm' 
-        : `w-10 h-10 rounded-full border-2 border-white shadow-md ${nodeColor} text-white`;
+        ? 'w-10 h-10 rotate-45 border-2 rounded-sm text-white' 
+        : `w-10 h-10 rounded-full border-2 border-white shadow-md text-white`;
+        
+    const customStyle = isDecision 
+        ? { backgroundColor: '#9ca3af', borderColor: '#6b7280' } 
+        : { backgroundColor: phaseColor };
+        
     const contentRotate = isDecision ? '-rotate-45' : '';
 
     return (
@@ -456,8 +476,9 @@ export default function App() {
         <div 
             onClick={(e) => { e.stopPropagation(); setSelectedActivityId(isSelected ? null : activity.id); }}
             className={`flex items-center justify-center font-bold text-xs cursor-pointer transition-transform duration-200 hover:scale-110 active:scale-95 shadow-sm ${shapeClasses} ${isSelected ? 'ring-4 ring-offset-2 ring-blue-300' : ''}`}
+            style={customStyle}
         >
-            <span className={`${contentRotate} ${isDecision ? 'text-white' : ''}`}>{activity.id}</span>
+            <span className={`${contentRotate}`}>{activity.id}</span>
         </div>
         <div className={`absolute left-16 top-1/2 -translate-y-1/2 w-72 bg-white rounded-xl shadow-2xl border border-slate-100 transition-all duration-300 pointer-events-none origin-left z-[101] ${isSelected ? 'opacity-100 scale-100 translate-x-0' : 'opacity-0 scale-95 -translate-x-4 pointer-events-none'}`}>
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
@@ -587,11 +608,13 @@ export default function App() {
             </svg>
 
             <div className="flex min-w-max h-full relative z-20 p-8 space-x-16">
-               {phases.map((phase, idx) => (
+               {phases.map((phase, idx) => {
+                  const phaseColor = getPhaseHexColor(phase);
+                  return (
                   <div key={phase.id} className="w-24 flex flex-col h-full items-center">
                       <div className="mb-10 sticky top-0 z-30 w-full flex flex-col items-center">
-                          <div className={`bg-white border-b-4 ${phase.color.split(' ')[1]} px-4 py-2 rounded-t-lg shadow-sm text-center min-w-[140px]`}>
-                              <span className="block text-[10px] font-bold text-slate-400 uppercase mb-0.5">FASE {idx + 1}</span>
+                          <div className={`border-b-4 px-4 py-2 rounded-t-lg shadow-sm text-center min-w-[140px]`} style={{ borderBottomColor: phaseColor, backgroundColor: `${phaseColor}15` }}>
+                              <span className="block text-[10px] font-bold uppercase mb-0.5" style={{ color: phaseColor }}>FASE {idx + 1}</span>
                               <h2 className="font-bold text-xs text-slate-800 uppercase tracking-wide">{phase.title.replace(/^\d+\.\s/, '')}</h2>
                           </div>
                           <div className="w-px h-full bg-slate-200 absolute top-full mt-0 -z-10"></div>
@@ -602,7 +625,7 @@ export default function App() {
                           ))}
                       </div>
                   </div>
-               ))}
+               )})}
                <div className="flex flex-col justify-center h-full pb-32 ml-4">
                   <div className="w-16 h-16 rounded-full border-4 border-slate-100 bg-white flex items-center justify-center shadow-inner group">
                       <span className="font-bold text-xs text-slate-300 group-hover:text-red-500 transition-colors">FIN</span>
@@ -612,27 +635,86 @@ export default function App() {
           </div>
         )}
 
-        {/* LISTA VISTA */}
+        {/* LISTA VISTA COMPLETAMENTE REDISEÑADA */}
         {activeTab === 'diagram_list' && (
-             <div className="flex-1 h-full overflow-y-auto bg-slate-50 p-8 scroll-smooth relative" onClick={() => setSelectedActivityId(null)}>
-                <div className="max-w-4xl mx-auto space-y-8 pb-20">
+             <div className="flex-1 h-full overflow-y-auto bg-slate-50/50 p-6 md:p-10 scroll-smooth relative" onClick={() => setSelectedActivityId(null)}>
+                <div className="max-w-6xl mx-auto space-y-12 pb-24">
                     {phases.map((phase, index) => {
                         const phaseActivities = activities.filter(a => a.phaseId === phase.id);
                         if(phaseActivities.length === 0) return null;
+                        
+                        const phaseColor = getPhaseHexColor(phase);
+                        
                         return (
-                            <div key={phase.id} className="relative pl-8 border-l-2 border-slate-200 ml-4">
-                                <div className="absolute -left-[17px] top-0 w-8 h-8 rounded-full bg-white border-2 border-slate-200 flex items-center justify-center font-bold text-slate-400 text-sm z-10 shadow-sm">{index + 1}</div>
-                                <h3 className="font-bold text-lg text-slate-800 mb-4 pl-2">{phase.title}</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div key={phase.id} className="relative">
+                                {/* Encabezado de la Fase estilo Timeline */}
+                                <div className="flex items-center gap-4 mb-6 sticky top-0 bg-slate-50/90 backdrop-blur-sm py-2 z-20">
+                                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-sm`} style={{ backgroundColor: phaseColor }}>
+                                        {index + 1}
+                                    </div>
+                                    <h3 className="font-bold text-xl text-slate-800 tracking-tight">{phase.title}</h3>
+                                    <div className="h-px flex-1 bg-slate-200 ml-4"></div>
+                                </div>
+
+                                {/* Cuadrícula de Tarjetas de Información */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 pl-4 md:pl-14">
                                     {phaseActivities.map(act => {
                                         if (getOpacity(act) === 'hidden') return null;
+                                        
                                         return (
-                                            <div key={act.id} onClick={(e)=>{ e.stopPropagation(); startEdit(act); }} className={`group p-4 bg-white rounded-lg shadow-sm border border-slate-100 cursor-pointer hover:border-blue-300 hover:shadow-md transition-all`}>
-                                                <div className="flex justify-between mb-2">
-                                                    <span className="text-xs font-bold text-slate-400">ID: {act.id}</span>
-                                                    <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${roleBadges[act.role] || 'bg-slate-100'}`}>{act.role}</span>
+                                            <div key={act.id} className="group relative bg-white rounded-xl shadow-sm border border-slate-200 p-5 hover:shadow-md hover:border-slate-300 transition-all flex flex-col h-full overflow-hidden">
+                                                {/* Línea indicadora de herencia de color */}
+                                                <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: phaseColor }}></div>
+                                                
+                                                {/* Header de la Tarjeta */}
+                                                <div className="flex justify-between items-start mb-3 pl-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">ID: {act.id}</span>
+                                                        <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[act.role] || 'bg-slate-100 text-slate-600'}`}>
+                                                            {act.role}
+                                                        </span>
+                                                    </div>
+                                                    {act.duration && act.duration !== 'N/A' && (
+                                                        <div className="flex items-center gap-1 text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
+                                                            <Clock className="w-3 h-3"/> {act.duration}
+                                                        </div>
+                                                    )}
                                                 </div>
-                                                <p className="text-sm font-medium text-slate-700 group-hover:text-slate-900">{act.text}</p>
+
+                                                {/* Título / Descripción */}
+                                                <p className="text-sm font-semibold text-slate-800 mb-4 pl-2 leading-relaxed flex-1">
+                                                    {act.text}
+                                                </p>
+
+                                                {/* Meta información compacta en el fondo de la tarjeta */}
+                                                <div className="flex flex-col gap-2 pl-2 mt-auto">
+                                                    {/* Condicional */}
+                                                    {act.condition && (
+                                                        <div className="flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 px-2.5 py-1.5 rounded-md border border-amber-100 font-medium w-full">
+                                                            <CornerDownRight className="w-3.5 h-3.5 flex-shrink-0" />
+                                                            <span className="truncate" title={act.condition}>{act.condition}</span>
+                                                        </div>
+                                                    )}
+                                                    
+                                                    {/* Badges de Rutas y Dependencias */}
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {act.predecessors && act.predecessors.length > 0 && (
+                                                            <div className="flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
+                                                                <GitBranch className="w-3 h-3 text-slate-400" />
+                                                                <span>Dep: {act.predecessors.join(', ')}</span>
+                                                            </div>
+                                                        )}
+                                                        {act.flows && act.flows.length > 0 && (
+                                                            <div 
+                                                              className="flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-50 px-2 py-1 rounded-md border border-slate-100" 
+                                                              title={act.flows.map(fId => flows.find(f => f.id === fId)?.label).join(', ')}
+                                                            >
+                                                                <Network className="w-3 h-3 text-slate-400" />
+                                                                <span>{act.flows.length} {act.flows.length === 1 ? 'Ruta' : 'Rutas'}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
                                             </div>
                                         );
                                     })}
@@ -657,12 +739,23 @@ export default function App() {
               <div className="flex-1 overflow-y-auto p-4">
                 {managementMode === 'phases' && (
                   <div className="space-y-3">
-                    {phases.map((phase) => (
-                      <div key={phase.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-2">
+                    {phases.map((phase) => {
+                      const phaseColor = getPhaseHexColor(phase);
+                      return (
+                      <div key={phase.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-slate-200 flex-shrink-0 cursor-pointer relative shadow-inner">
+                            <input 
+                                type="color" 
+                                value={phaseColor} 
+                                onChange={(e) => updatePhaseColor(phase.id, e.target.value)}
+                                className="absolute -top-2 -left-2 w-12 h-12 cursor-pointer"
+                                title="Cambiar color de la fase"
+                            />
+                        </div>
                         <input className="flex-1 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500" value={phase.title} onChange={(e) => updatePhaseTitle(phase.id, e.target.value)} />
                         <button type="button" onClick={() => requestDeletePhase(phase.id)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                       </div>
-                    ))}
+                    )})}
                     <button onClick={addPhase} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-400 font-bold text-sm hover:border-blue-400 hover:text-blue-600 flex justify-center gap-2 transition-colors"><Plus className="w-4 h-4"/> Nueva Fase</button>
                   </div>
                 )}
