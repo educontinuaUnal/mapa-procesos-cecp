@@ -808,13 +808,22 @@ export default function App() {
                       <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Descripción</label>
                       <textarea className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all h-24" value={formData.text} onChange={e=>setFormData({...formData, text: e.target.value})} />
                   </div>
-                  <div className="grid grid-cols-2 gap-5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                      <div>
                          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Rol Responsable</label>
                          <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none" value={formData.role} onChange={e=>setFormData({...formData, role: e.target.value})}>
                              <option value="">Seleccionar...</option>
                              {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
                          </select>
+                     </div>
+                     <div>
+                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Duración</label>
+                         <input
+                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            placeholder="Ej: 3 días"
+                            value={formData.duration}
+                            onChange={e => setFormData({...formData, duration: e.target.value})}
+                         />
                      </div>
                      <div>
                          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Predecesores (IDs)</label>
