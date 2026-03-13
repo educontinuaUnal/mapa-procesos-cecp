@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { 
   Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
   CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch
@@ -171,6 +171,7 @@ export default function App() {
     text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: ''
   });
   const [insertBeforeId, setInsertBeforeId] = useState(null);
+  const [insertPhaseId, setInsertPhaseId] = useState(null);
   const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
   const [dragDropTarget, setDragDropTarget] = useState('none');
 
@@ -180,6 +181,7 @@ export default function App() {
   );
 
   const getPhaseSortedActivities = (phaseId) => sortedActivities.filter(activity => activity.phaseId === phaseId);
+  const getTargetKey = (targetId, phaseId) => (targetId === null ? `end:${phaseId}` : `before:${targetId}`);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -254,79 +256,113 @@ export default function App() {
   }, [user, activeStage]);
 
 
-  // --- CALCULO DE LÍNEAS ROBUSTO ---
-  const calculateLines = () => {
-    if (activeTab !== 'diagram_node' || !containerRef.current || activities.length === 0) return;
+  const getDownstreamPath = useCallback((startId, allActs = activities) => {
+    let path = new Set([startId]);
+    let queue = [startId];
+    while(queue.length > 0) {
+      const current = queue.shift();
+      const children = allActs.filter(a => a.predecessors.includes(current));
+      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
+    }
+    return path;
+  }, [activities]);
 
-    const newLines = [];
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const scrollLeft = containerRef.current.scrollLeft;
-    const scrollTop = containerRef.current.scrollTop;
+  const getUpstreamPath = useCallback((startId, allActs = activities) => {
+    let path = new Set([startId]);
+    const findParents = (id) => {
+      const act = allActs.find(a => a.id === id);
+      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
+    };
+    findParents(startId);
+    return path;
+  }, [activities]);
 
-    activities.forEach(act => {
-      if (getOpacity(act) === 'hidden') return;
+  const getOpacity = useCallback((act) => {
+    const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
+    const matchesRole = activeFilters.role === 'all' || act.role === activeFilters.role;
+    if (!matchesFlow || !matchesRole) return 'hidden';
+    if (selectedActivityId) {
+      const downstream = getDownstreamPath(selectedActivityId);
+      const upstream = getUpstreamPath(selectedActivityId);
+      if (downstream.has(act.id) || upstream.has(act.id)) return 'opacity-100 scale-100';
+      return 'opacity-20 grayscale';
+    }
+    return 'opacity-100';
+  }, [activeFilters.flow, activeFilters.role, getDownstreamPath, getUpstreamPath, selectedActivityId]);
 
-      if (act.predecessors && act.predecessors.length > 0) {
-        const endNode = nodeRefs.current[act.id];
-        
-        act.predecessors.forEach(predId => {
-          const startNode = nodeRefs.current[predId];
-          const predAct = activities.find(a => a.id === predId);
+  useLayoutEffect(() => {
+    const calculateLines = () => {
+      if (activeTab !== 'diagram_node' || !containerRef.current || activities.length === 0) return;
 
-          if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
-             const startRect = startNode.getBoundingClientRect();
-             const endRect = endNode.getBoundingClientRect();
+      const newLines = [];
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const scrollLeft = containerRef.current.scrollLeft;
+      const scrollTop = containerRef.current.scrollTop;
 
-             const startX = startRect.right - containerRect.left + scrollLeft;
-             const startY = startRect.top + (startRect.height / 2) - containerRect.top + scrollTop;
-             const endX = endRect.left - containerRect.left + scrollLeft;
-             const endY = endRect.top + (endRect.height / 2) - containerRect.top + scrollTop;
+      activities.forEach(act => {
+        if (getOpacity(act) === 'hidden') return;
 
-             let strokeColor = '#e2e8f0'; 
-             let strokeWidth = 2;
-             let zIndex = 0;
-             let isFlowActive = false;
-             
-             if (activeFilters.flow !== 'all') {
+        if (act.predecessors && act.predecessors.length > 0) {
+          const endNode = nodeRefs.current[act.id];
+
+          act.predecessors.forEach(predId => {
+            const startNode = nodeRefs.current[predId];
+            const predAct = activities.find(a => a.id === predId);
+
+            if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
+              const startRect = startNode.getBoundingClientRect();
+              const endRect = endNode.getBoundingClientRect();
+
+              const startX = startRect.right - containerRect.left + scrollLeft;
+              const startY = startRect.top + (startRect.height / 2) - containerRect.top + scrollTop;
+              const endX = endRect.left - containerRect.left + scrollLeft;
+              const endY = endRect.top + (endRect.height / 2) - containerRect.top + scrollTop;
+
+              let strokeColor = '#e2e8f0';
+              let strokeWidth = 2;
+              let zIndex = 0;
+              let isFlowActive = false;
+
+              if (activeFilters.flow !== 'all') {
                 if (act.flows.includes(activeFilters.flow) && predAct.flows.includes(activeFilters.flow)) {
-                    const flowObj = flows.find(f => f.id === activeFilters.flow);
-                    if (flowObj) strokeColor = flowObj.color;
-                    strokeWidth = 3;
-                    zIndex = 10;
-                    isFlowActive = true;
+                  const flowObj = flows.find(f => f.id === activeFilters.flow);
+                  if (flowObj) strokeColor = flowObj.color;
+                  strokeWidth = 3;
+                  zIndex = 10;
+                  isFlowActive = true;
                 }
-             } else if (selectedActivityId) {
+              } else if (selectedActivityId) {
                 const downstream = getDownstreamPath(selectedActivityId);
                 const upstream = getUpstreamPath(selectedActivityId);
                 const isRelated = (downstream.has(act.id) && downstream.has(predId)) || (upstream.has(act.id) && upstream.has(predId));
-                
+
                 if (isRelated) {
-                    strokeColor = '#64748b'; 
-                    strokeWidth = 3;
-                    zIndex = 10;
-                    isFlowActive = true;
+                  strokeColor = '#64748b';
+                  strokeWidth = 3;
+                  zIndex = 10;
+                  isFlowActive = true;
                 }
-             }
+              }
 
-             const dist = Math.abs(endX - startX);
-             const cpOffset = dist * 0.5; 
+              const dist = Math.abs(endX - startX);
+              const cpOffset = dist * 0.5;
 
-             newLines.push({
-               id: `${predId}-${act.id}`,
-               d: `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`,
-               color: strokeColor,
-               width: strokeWidth,
-               zIndex: zIndex,
-               animated: isFlowActive
-             });
-          }
-        });
-      }
-    });
-    setLines(newLines);
-  };
+              newLines.push({
+                id: `${predId}-${act.id}`,
+                d: `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`,
+                color: strokeColor,
+                width: strokeWidth,
+                zIndex,
+                animated: isFlowActive,
+              });
+            }
+          });
+        }
+      });
 
-  useLayoutEffect(() => {
+      setLines(newLines);
+    };
+
     calculateLines();
     const container = containerRef.current;
     if (container) container.addEventListener('scroll', calculateLines);
@@ -335,7 +371,7 @@ export default function App() {
         if (container) container.removeEventListener('scroll', calculateLines);
         window.removeEventListener('resize', calculateLines);
     };
-  }, [activities, activeFilters, activeTab, selectedActivityId, phases, flows]);
+  }, [activities, activeFilters, activeTab, flows, selectedActivityId, getDownstreamPath, getOpacity, getUpstreamPath]);
 
   // --- NAVEGACIÓN Y SEGURIDAD ---
   const handleEditorTabClick = () => {
@@ -359,6 +395,10 @@ export default function App() {
     setSelectedActivityId(null);
     setLines([]);
     setIsEditingActivity(null);
+    setInsertBeforeId(null);
+    setInsertPhaseId(null);
+    setIsDraggingNewActivity(false);
+    setDragDropTarget('none');
     setTempFilters({ flow: 'all', role: 'all' });
     setActiveFilters({ flow: 'all', role: 'all' });
     setFormData({ text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
@@ -366,40 +406,6 @@ export default function App() {
 
   const applyFilters = () => { setActiveFilters(tempFilters); setSelectedActivityId(null); };
   const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setSelectedActivityId(null); };
-
-  const getDownstreamPath = (startId, allActs = activities) => {
-    let path = new Set([startId]);
-    let queue = [startId];
-    while(queue.length > 0) {
-      const current = queue.shift();
-      const children = allActs.filter(a => a.predecessors.includes(current));
-      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
-    }
-    return path;
-  };
-
-  const getUpstreamPath = (startId, allActs = activities) => {
-    let path = new Set([startId]);
-    const findParents = (id) => {
-      const act = allActs.find(a => a.id === id);
-      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
-    };
-    findParents(startId);
-    return path;
-  };
-
-  const getOpacity = (act) => {
-    const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
-    const matchesRole = activeFilters.role === 'all' || act.role === activeFilters.role;
-    if (!matchesFlow || !matchesRole) return 'hidden';
-    if (selectedActivityId) {
-      const downstream = getDownstreamPath(selectedActivityId);
-      const upstream = getUpstreamPath(selectedActivityId);
-      if (downstream.has(act.id) || upstream.has(act.id)) return 'opacity-100 scale-100';
-      return 'opacity-20 grayscale';
-    }
-    return 'opacity-100';
-  };
 
   // --- CRUD A FIREBASE (Guardado en Tiempo Real) ---
 
@@ -492,6 +498,7 @@ export default function App() {
   const resetForm = () => {
     setIsEditingActivity(null);
     setInsertBeforeId(null);
+    setInsertPhaseId(null);
     setDragDropTarget('none');
     setIsDraggingNewActivity(false);
     setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
@@ -509,24 +516,26 @@ export default function App() {
     setDragDropTarget('none');
   };
 
-  const handleDragOverInsertion = (event, targetId) => {
+  const handleDragOverInsertion = (event, targetId, phaseId) => {
     if (!isDraggingNewActivity) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
-    setDragDropTarget(targetId === null ? 'end' : targetId);
+    setDragDropTarget(getTargetKey(targetId, phaseId));
   };
 
-  const handleDropInsertion = (event, targetId) => {
+  const handleDropInsertion = (event, targetId, phaseId) => {
     if (!isDraggingNewActivity) return;
     event.preventDefault();
     setInsertBeforeId(targetId);
-    setDragDropTarget(targetId === null ? 'end' : targetId);
+    setInsertPhaseId(phaseId);
+    setDragDropTarget(getTargetKey(targetId, phaseId));
     setIsDraggingNewActivity(false);
+    setFormData(current => ({ ...current, phaseId }));
   };
 
   const remapId = (currentId, threshold) => (currentId >= threshold ? currentId + 1 : currentId);
 
-  const saveActivitiesWithReindex = async (newActivity, insertionId) => {
+  const saveActivitiesWithReindex = async (newActivity, insertionId, phaseId) => {
     const sortedByIdAsc = [...activities].sort((a, b) => a.id - b.id);
     const nextId = insertionId || (Math.max(0, ...activities.map(a => a.id)) + 1);
     const reindexedExisting = sortedByIdAsc.map(activity => ({
@@ -538,6 +547,7 @@ export default function App() {
     const newActivityWithId = {
       ...newActivity,
       id: nextId,
+      phaseId: phaseId || newActivity.phaseId,
       predecessors: (newActivity.predecessors || []).map(predId => remapId(predId, nextId)),
     };
 
@@ -564,7 +574,7 @@ export default function App() {
       newActivity.id = parseInt(docId);
       await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
     } else {
-      await saveActivitiesWithReindex(newActivity, insertBeforeId);
+      await saveActivitiesWithReindex(newActivity, insertBeforeId, insertPhaseId);
     }
 
     resetForm();
@@ -573,6 +583,7 @@ export default function App() {
   const startEdit = (activity) => {
     setIsEditingActivity(activity.id);
     setInsertBeforeId(null);
+    setInsertPhaseId(null);
     setFormData({ ...activity, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
     setActiveTab('editor');
   };
@@ -944,7 +955,7 @@ export default function App() {
                   </div>
                 )}
                 {managementMode === 'activities' && (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                      <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-xs text-slate-400 uppercase tracking-wider">Inventario</h3>
                         <button
@@ -958,45 +969,59 @@ export default function App() {
                           + Nueva
                         </button>
                      </div>
-                     {isDraggingNewActivity && sortedActivities.length > 0 && (
-                        <div
-                          onDragOver={(event) => handleDragOverInsertion(event, sortedActivities[0].id)}
-                          onDrop={(event) => handleDropInsertion(event, sortedActivities[0].id)}
-                          className={`h-8 rounded-md border-2 border-dashed text-[11px] font-bold transition-all flex items-center justify-center ${dragDropTarget === sortedActivities[0].id ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-200 text-slate-400 bg-slate-50'}`}
-                        >
-                          Insertar al inicio (ID más alto)
-                        </div>
-                     )}
-                     {sortedActivities.map(act => (
-                        <React.Fragment key={act.id}>
-                          {isDraggingNewActivity && (
-                            <div
-                              onDragOver={(event) => handleDragOverInsertion(event, act.id)}
-                              onDrop={(event) => handleDropInsertion(event, act.id)}
-                              className={`h-3 rounded transition-all ${dragDropTarget === act.id ? 'bg-emerald-200' : 'bg-transparent'}`}
-                            />
-                          )}
-                          <div
-                            onClick={() => startEdit(act)}
-                            className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''}`}
-                          >
-                              <div className="pr-6">
-                                  <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
-                                  <span className="text-[10px] text-slate-400">ID: {act.id}</span>
+                     {phases.map((phase) => {
+                        const phaseActivities = getPhaseSortedActivities(phase.id);
+                        const phaseColor = getPhaseHexColor(phase);
+                        return (
+                          <div key={phase.id} className="rounded-lg border border-slate-200 bg-slate-50/60 p-2">
+                            <div className="px-2 py-1.5 text-[10px] font-black uppercase tracking-wider" style={{ color: phaseColor }}>
+                              {phase.title}
+                            </div>
+
+                            {isDraggingNewActivity && phaseActivities.length > 0 && (
+                              <div
+                                onDragOver={(event) => handleDragOverInsertion(event, phaseActivities[0].id, phase.id)}
+                                onDrop={(event) => handleDropInsertion(event, phaseActivities[0].id, phase.id)}
+                                className={`mb-1 h-8 rounded-md border-2 border-dashed text-[11px] font-bold transition-all flex items-center justify-center ${dragDropTarget === getTargetKey(phaseActivities[0].id, phase.id) ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-200 text-slate-400 bg-white'}`}
+                              >
+                                Insertar al inicio de {phase.title}
                               </div>
-                              <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
+                            )}
+
+                            {phaseActivities.map(act => (
+                              <React.Fragment key={act.id}>
+                                {isDraggingNewActivity && (
+                                  <div
+                                    onDragOver={(event) => handleDragOverInsertion(event, act.id, phase.id)}
+                                    onDrop={(event) => handleDropInsertion(event, act.id, phase.id)}
+                                    className={`h-3 rounded transition-all ${dragDropTarget === getTargetKey(act.id, phase.id) ? 'bg-emerald-200' : 'bg-transparent'}`}
+                                  />
+                                )}
+                                <div
+                                  onClick={() => startEdit(act)}
+                                  className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''}`}
+                                >
+                                    <div className="pr-6">
+                                        <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
+                                        <span className="text-[10px] text-slate-400">ID: {act.id}</span>
+                                    </div>
+                                    <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
+                                </div>
+                              </React.Fragment>
+                            ))}
+
+                            {isDraggingNewActivity && (
+                              <div
+                                onDragOver={(event) => handleDragOverInsertion(event, null, phase.id)}
+                                onDrop={(event) => handleDropInsertion(event, null, phase.id)}
+                                className={`mt-1 p-2 border-2 border-dashed rounded-lg text-[11px] font-bold transition-all ${dragDropTarget === getTargetKey(null, phase.id) ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-300 text-slate-500 bg-white'}`}
+                              >
+                                Soltar al final de {phase.title}
+                              </div>
+                            )}
                           </div>
-                        </React.Fragment>
-                     ))}
-                     {isDraggingNewActivity && (
-                        <div
-                          onDragOver={(event) => handleDragOverInsertion(event, null)}
-                          onDrop={(event) => handleDropInsertion(event, null)}
-                          className={`p-3 border-2 border-dashed rounded-lg text-[11px] font-bold transition-all ${dragDropTarget === 'end' ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-300 text-slate-500 bg-slate-50'}`}
-                        >
-                          Soltar aquí para agregar al final
-                        </div>
-                     )}
+                        );
+                     })}
                   </div>
                 )}
               </div>
@@ -1010,7 +1035,7 @@ export default function App() {
                </h2>
                {!isEditingActivity && insertBeforeId && (
                   <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-                    La nueva actividad se insertará en la posición del ID {insertBeforeId}.
+                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} en la posición del ID {insertBeforeId}.
                   </div>
                )}
                <div className="grid grid-cols-1 gap-5 max-w-2xl">
