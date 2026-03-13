@@ -239,9 +239,31 @@ export default function App() {
            const batch = writeBatch(db);
            stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
            stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
-           stageDefaultsData.activities.forEach(a => batch.set(doc(db, stageColPath('activities'), a.id.toString()), a));
+           stageDefaultsData.activities.forEach((a, index) => batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP }));
            await batch.commit();
-           data = stageDefaultsData.activities;
+           data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP }));
+        }
+
+        const missingOrder = data.filter(activity => typeof activity.order_index !== 'number');
+        if (missingOrder.length > 0) {
+          const batch = writeBatch(db);
+          const phaseCatalog = data.length > 0
+            ? Array.from(new Set(data.map(activity => activity.phaseId))).map(id => ({ id }))
+            : stageDefaultsData.phases;
+
+          phaseCatalog.forEach(phase => {
+            const phaseActivities = data
+              .filter(activity => activity.phaseId === phase.id)
+              .sort((a, b) => a.id - b.id);
+            phaseActivities.forEach((activity, index) => {
+              if (typeof activity.order_index !== 'number') {
+                const order_index = (index + 1) * ORDER_GAP;
+                activity.order_index = order_index;
+                batch.set(doc(db, stageColPath('activities'), activity.id.toString()), { order_index }, { merge: true });
+              }
+            });
+          });
+          await batch.commit();
         }
 
         setActivities(data);
@@ -607,6 +629,7 @@ export default function App() {
     const phaseObj = phases.find(p => p.id === activity.phaseId);
     const phaseColor = getPhaseHexColor(phaseObj);
     const isDecision = activity.type === 'decision';
+    const displayNumber = displayOrderByActivityId[activity.id] || 0;
     
     const shapeClasses = isDecision 
         ? 'w-10 h-10 rotate-45 border-2 rounded-sm text-white' 
@@ -625,12 +648,12 @@ export default function App() {
             className={`flex items-center justify-center font-bold text-xs cursor-pointer transition-transform duration-200 hover:scale-110 active:scale-95 shadow-sm ${shapeClasses} ${isSelected ? 'ring-4 ring-offset-2 ring-blue-300' : ''}`}
             style={customStyle}
         >
-            <span className={`${contentRotate}`}>{activity.id}</span>
+            <span className={`${contentRotate}`}>{displayNumber}</span>
         </div>
         <div className={`absolute left-16 top-1/2 -translate-y-1/2 w-72 bg-white rounded-xl shadow-2xl border border-slate-100 transition-all duration-300 pointer-events-none origin-left z-[101] ${isSelected ? 'opacity-100 scale-100 translate-x-0' : 'opacity-0 scale-95 -translate-x-4 pointer-events-none'}`}>
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
             <div className="flex justify-between items-center p-3 border-b border-slate-50 bg-slate-50/50 rounded-t-xl">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isDecision ? 'Decisión' : 'Actividad'} #{activity.id}</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isDecision ? 'Decisión' : 'Actividad'} #{displayNumber}</span>
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${roleBadges[activity.role] || 'bg-slate-100'}`}>{activity.role}</span>
             </div>
             <div className="p-4">
@@ -852,7 +875,7 @@ export default function App() {
                                                 {/* Header de la Tarjeta */}
                                                 <div className="flex justify-between items-start mb-3 pl-2">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">ID: {act.id}</span>
+                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">N°: {displayOrderByActivityId[act.id] || 0}</span>
                                                         <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[act.role] || 'bg-slate-100 text-slate-600'}`}>
                                                             {act.role}
                                                         </span>
