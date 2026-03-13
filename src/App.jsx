@@ -172,11 +172,14 @@ export default function App() {
   });
   const [insertBeforeId, setInsertBeforeId] = useState(null);
   const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
+  const [dragDropTarget, setDragDropTarget] = useState('none');
 
   const sortedActivities = useMemo(
     () => [...activities].sort((a, b) => b.id - a.id),
     [activities]
   );
+
+  const getPhaseSortedActivities = (phaseId) => sortedActivities.filter(activity => activity.phaseId === phaseId);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -489,7 +492,36 @@ export default function App() {
   const resetForm = () => {
     setIsEditingActivity(null);
     setInsertBeforeId(null);
+    setDragDropTarget('none');
+    setIsDraggingNewActivity(false);
     setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+  };
+
+  const startNewActivityDrag = (event) => {
+    resetForm();
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('text/plain', 'new-activity');
+    setIsDraggingNewActivity(true);
+  };
+
+  const endNewActivityDrag = () => {
+    setIsDraggingNewActivity(false);
+    setDragDropTarget('none');
+  };
+
+  const handleDragOverInsertion = (event, targetId) => {
+    if (!isDraggingNewActivity) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDragDropTarget(targetId === null ? 'end' : targetId);
+  };
+
+  const handleDropInsertion = (event, targetId) => {
+    if (!isDraggingNewActivity) return;
+    event.preventDefault();
+    setInsertBeforeId(targetId);
+    setDragDropTarget(targetId === null ? 'end' : targetId);
+    setIsDraggingNewActivity(false);
   };
 
   const remapId = (currentId, threshold) => (currentId >= threshold ? currentId + 1 : currentId);
@@ -760,7 +792,7 @@ export default function App() {
                           <div className="w-px h-full bg-slate-200 absolute top-full mt-0 -z-10"></div>
                       </div>
                       <div className="flex-1 w-full flex flex-col items-center pb-20 pt-4 space-y-4">
-                          {sortedActivities.filter(a => a.phaseId === phase.id).map(act => (
+                          {getPhaseSortedActivities(phase.id).map(act => (
                               <NodeCard key={act.id} activity={act} />
                           ))}
                       </div>
@@ -780,7 +812,7 @@ export default function App() {
              <div className="flex-1 h-full overflow-y-auto bg-slate-50/50 p-6 md:p-10 scroll-smooth relative" onClick={() => setSelectedActivityId(null)}>
                 <div className="max-w-6xl mx-auto space-y-12 pb-24">
                     {phases.map((phase, index) => {
-                        const phaseActivities = sortedActivities.filter(a => a.phaseId === phase.id);
+                        const phaseActivities = getPhaseSortedActivities(phase.id);
                         if(phaseActivities.length === 0) return null;
                         
                         const phaseColor = getPhaseHexColor(phase);
@@ -917,11 +949,8 @@ export default function App() {
                         <h3 className="font-bold text-xs text-slate-400 uppercase tracking-wider">Inventario</h3>
                         <button
                           draggable
-                          onDragStart={() => {
-                            resetForm();
-                            setIsDraggingNewActivity(true);
-                          }}
-                          onDragEnd={() => setIsDraggingNewActivity(false)}
+                          onDragStart={startNewActivityDrag}
+                          onDragEnd={endNewActivityDrag}
                           onClick={resetForm}
                           className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md font-bold hover:bg-blue-700 shadow-sm transition-all cursor-grab active:cursor-grabbing"
                           title="Arrastra para insertar por posición o haz click para agregar al final"
@@ -929,39 +958,41 @@ export default function App() {
                           + Nueva
                         </button>
                      </div>
-                     {sortedActivities.map(act => (
+                     {isDraggingNewActivity && sortedActivities.length > 0 && (
                         <div
-                          key={act.id}
-                          onDragOver={(e) => {
-                            if (!isDraggingNewActivity) return;
-                            e.preventDefault();
-                            setInsertBeforeId(act.id);
-                          }}
-                          onDrop={(e) => {
-                            if (!isDraggingNewActivity) return;
-                            e.preventDefault();
-                            setInsertBeforeId(act.id);
-                            setIsDraggingNewActivity(false);
-                          }}
-                          onClick={() => startEdit(act)}
-                          className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''}`}
+                          onDragOver={(event) => handleDragOverInsertion(event, sortedActivities[0].id)}
+                          onDrop={(event) => handleDropInsertion(event, sortedActivities[0].id)}
+                          className={`h-8 rounded-md border-2 border-dashed text-[11px] font-bold transition-all flex items-center justify-center ${dragDropTarget === sortedActivities[0].id ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-200 text-slate-400 bg-slate-50'}`}
                         >
-                            <div className="pr-6">
-                                <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
-                                <span className="text-[10px] text-slate-400">ID: {act.id}</span>
-                            </div>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
+                          Insertar al inicio (ID más alto)
                         </div>
+                     )}
+                     {sortedActivities.map(act => (
+                        <React.Fragment key={act.id}>
+                          {isDraggingNewActivity && (
+                            <div
+                              onDragOver={(event) => handleDragOverInsertion(event, act.id)}
+                              onDrop={(event) => handleDropInsertion(event, act.id)}
+                              className={`h-3 rounded transition-all ${dragDropTarget === act.id ? 'bg-emerald-200' : 'bg-transparent'}`}
+                            />
+                          )}
+                          <div
+                            onClick={() => startEdit(act)}
+                            className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''}`}
+                          >
+                              <div className="pr-6">
+                                  <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
+                                  <span className="text-[10px] text-slate-400">ID: {act.id}</span>
+                              </div>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
+                          </div>
+                        </React.Fragment>
                      ))}
                      {isDraggingNewActivity && (
                         <div
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setInsertBeforeId(null);
-                            setIsDraggingNewActivity(false);
-                          }}
-                          className="p-3 border-2 border-dashed border-emerald-300 rounded-lg text-[11px] font-bold text-emerald-700 bg-emerald-50"
+                          onDragOver={(event) => handleDragOverInsertion(event, null)}
+                          onDrop={(event) => handleDropInsertion(event, null)}
+                          className={`p-3 border-2 border-dashed rounded-lg text-[11px] font-bold transition-all ${dragDropTarget === 'end' ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-300 text-slate-500 bg-slate-50'}`}
                         >
                           Soltar aquí para agregar al final
                         </div>
