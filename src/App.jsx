@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { 
   Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
-  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch
+  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch, ChevronUp, ChevronDown
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -170,6 +170,40 @@ export default function App() {
   const [formData, setFormData] = useState({
     text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: ''
   });
+  const [insertBeforeId, setInsertBeforeId] = useState(null);
+  const [insertPhaseId, setInsertPhaseId] = useState(null);
+  const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
+  const [draggedActivityId, setDraggedActivityId] = useState(null);
+  const [dragDropTarget, setDragDropTarget] = useState('none');
+
+  const ORDER_GAP = 1024;
+  const phaseOrderMap = useMemo(
+    () => Object.fromEntries(phases.map((phase, index) => [phase.id, index])),
+    [phases]
+  );
+
+  const sortedActivities = useMemo(
+    () => [...activities].sort((a, b) => {
+      const phaseOrderA = phaseOrderMap[a.phaseId] ?? Number.MAX_SAFE_INTEGER;
+      const phaseOrderB = phaseOrderMap[b.phaseId] ?? Number.MAX_SAFE_INTEGER;
+      if (phaseOrderA !== phaseOrderB) return phaseOrderA - phaseOrderB;
+      const aOrder = a.order_index ?? (a.id * ORDER_GAP);
+      const bOrder = b.order_index ?? (b.id * ORDER_GAP);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return a.id - b.id;
+    }),
+    [activities, phaseOrderMap]
+  );
+
+  const getPhaseSortedActivities = (phaseId) => sortedActivities.filter(activity => activity.phaseId === phaseId);
+  const getTargetKey = (targetId, phaseId) => (targetId === null ? `end:${phaseId}` : `before:${targetId}`);
+  const displayOrderByActivityId = useMemo(() => {
+    const result = {};
+    sortedActivities.forEach((activity, index) => {
+      result[activity.id] = index + 1;
+    });
+    return result;
+  }, [sortedActivities]);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -227,9 +261,31 @@ export default function App() {
            const batch = writeBatch(db);
            stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
            stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
-           stageDefaultsData.activities.forEach(a => batch.set(doc(db, stageColPath('activities'), a.id.toString()), a));
+           stageDefaultsData.activities.forEach((a, index) => batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP }));
            await batch.commit();
-           data = stageDefaultsData.activities;
+           data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP }));
+        }
+
+        const missingOrder = data.filter(activity => typeof activity.order_index !== 'number');
+        if (missingOrder.length > 0) {
+          const batch = writeBatch(db);
+          const phaseCatalog = data.length > 0
+            ? Array.from(new Set(data.map(activity => activity.phaseId))).map(id => ({ id }))
+            : stageDefaultsData.phases;
+
+          phaseCatalog.forEach(phase => {
+            const phaseActivities = data
+              .filter(activity => activity.phaseId === phase.id)
+              .sort((a, b) => a.id - b.id);
+            phaseActivities.forEach((activity, index) => {
+              if (typeof activity.order_index !== 'number') {
+                const order_index = (index + 1) * ORDER_GAP;
+                activity.order_index = order_index;
+                batch.set(doc(db, stageColPath('activities'), activity.id.toString()), { order_index }, { merge: true });
+              }
+            });
+          });
+          await batch.commit();
         }
 
         setActivities(data);
@@ -244,79 +300,113 @@ export default function App() {
   }, [user, activeStage]);
 
 
-  // --- CALCULO DE LÍNEAS ROBUSTO ---
-  const calculateLines = () => {
-    if (activeTab !== 'diagram_node' || !containerRef.current || activities.length === 0) return;
+  const getDownstreamPath = useCallback((startId, allActs = activities) => {
+    let path = new Set([startId]);
+    let queue = [startId];
+    while(queue.length > 0) {
+      const current = queue.shift();
+      const children = allActs.filter(a => a.predecessors.includes(current));
+      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
+    }
+    return path;
+  }, [activities]);
 
-    const newLines = [];
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const scrollLeft = containerRef.current.scrollLeft;
-    const scrollTop = containerRef.current.scrollTop;
+  const getUpstreamPath = useCallback((startId, allActs = activities) => {
+    let path = new Set([startId]);
+    const findParents = (id) => {
+      const act = allActs.find(a => a.id === id);
+      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
+    };
+    findParents(startId);
+    return path;
+  }, [activities]);
 
-    activities.forEach(act => {
-      if (getOpacity(act) === 'hidden') return;
+  const getOpacity = useCallback((act) => {
+    const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
+    const matchesRole = activeFilters.role === 'all' || act.role === activeFilters.role;
+    if (!matchesFlow || !matchesRole) return 'hidden';
+    if (selectedActivityId) {
+      const downstream = getDownstreamPath(selectedActivityId);
+      const upstream = getUpstreamPath(selectedActivityId);
+      if (downstream.has(act.id) || upstream.has(act.id)) return 'opacity-100 scale-100';
+      return 'opacity-20 grayscale';
+    }
+    return 'opacity-100';
+  }, [activeFilters.flow, activeFilters.role, getDownstreamPath, getUpstreamPath, selectedActivityId]);
 
-      if (act.predecessors && act.predecessors.length > 0) {
-        const endNode = nodeRefs.current[act.id];
-        
-        act.predecessors.forEach(predId => {
-          const startNode = nodeRefs.current[predId];
-          const predAct = activities.find(a => a.id === predId);
+  useLayoutEffect(() => {
+    const calculateLines = () => {
+      if (activeTab !== 'diagram_node' || !containerRef.current || activities.length === 0) return;
 
-          if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
-             const startRect = startNode.getBoundingClientRect();
-             const endRect = endNode.getBoundingClientRect();
+      const newLines = [];
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const scrollLeft = containerRef.current.scrollLeft;
+      const scrollTop = containerRef.current.scrollTop;
 
-             const startX = startRect.right - containerRect.left + scrollLeft;
-             const startY = startRect.top + (startRect.height / 2) - containerRect.top + scrollTop;
-             const endX = endRect.left - containerRect.left + scrollLeft;
-             const endY = endRect.top + (endRect.height / 2) - containerRect.top + scrollTop;
+      activities.forEach(act => {
+        if (getOpacity(act) === 'hidden') return;
 
-             let strokeColor = '#e2e8f0'; 
-             let strokeWidth = 2;
-             let zIndex = 0;
-             let isFlowActive = false;
-             
-             if (activeFilters.flow !== 'all') {
+        if (act.predecessors && act.predecessors.length > 0) {
+          const endNode = nodeRefs.current[act.id];
+
+          act.predecessors.forEach(predId => {
+            const startNode = nodeRefs.current[predId];
+            const predAct = activities.find(a => a.id === predId);
+
+            if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
+              const startRect = startNode.getBoundingClientRect();
+              const endRect = endNode.getBoundingClientRect();
+
+              const startX = startRect.right - containerRect.left + scrollLeft;
+              const startY = startRect.top + (startRect.height / 2) - containerRect.top + scrollTop;
+              const endX = endRect.left - containerRect.left + scrollLeft;
+              const endY = endRect.top + (endRect.height / 2) - containerRect.top + scrollTop;
+
+              let strokeColor = '#e2e8f0';
+              let strokeWidth = 2;
+              let zIndex = 0;
+              let isFlowActive = false;
+
+              if (activeFilters.flow !== 'all') {
                 if (act.flows.includes(activeFilters.flow) && predAct.flows.includes(activeFilters.flow)) {
-                    const flowObj = flows.find(f => f.id === activeFilters.flow);
-                    if (flowObj) strokeColor = flowObj.color;
-                    strokeWidth = 3;
-                    zIndex = 10;
-                    isFlowActive = true;
+                  const flowObj = flows.find(f => f.id === activeFilters.flow);
+                  if (flowObj) strokeColor = flowObj.color;
+                  strokeWidth = 3;
+                  zIndex = 10;
+                  isFlowActive = true;
                 }
-             } else if (selectedActivityId) {
+              } else if (selectedActivityId) {
                 const downstream = getDownstreamPath(selectedActivityId);
                 const upstream = getUpstreamPath(selectedActivityId);
                 const isRelated = (downstream.has(act.id) && downstream.has(predId)) || (upstream.has(act.id) && upstream.has(predId));
-                
+
                 if (isRelated) {
-                    strokeColor = '#64748b'; 
-                    strokeWidth = 3;
-                    zIndex = 10;
-                    isFlowActive = true;
+                  strokeColor = '#64748b';
+                  strokeWidth = 3;
+                  zIndex = 10;
+                  isFlowActive = true;
                 }
-             }
+              }
 
-             const dist = Math.abs(endX - startX);
-             const cpOffset = dist * 0.5; 
+              const dist = Math.abs(endX - startX);
+              const cpOffset = dist * 0.5;
 
-             newLines.push({
-               id: `${predId}-${act.id}`,
-               d: `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`,
-               color: strokeColor,
-               width: strokeWidth,
-               zIndex: zIndex,
-               animated: isFlowActive
-             });
-          }
-        });
-      }
-    });
-    setLines(newLines);
-  };
+              newLines.push({
+                id: `${predId}-${act.id}`,
+                d: `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`,
+                color: strokeColor,
+                width: strokeWidth,
+                zIndex,
+                animated: isFlowActive,
+              });
+            }
+          });
+        }
+      });
 
-  useLayoutEffect(() => {
+      setLines(newLines);
+    };
+
     calculateLines();
     const container = containerRef.current;
     if (container) container.addEventListener('scroll', calculateLines);
@@ -325,7 +415,7 @@ export default function App() {
         if (container) container.removeEventListener('scroll', calculateLines);
         window.removeEventListener('resize', calculateLines);
     };
-  }, [activities, activeFilters, activeTab, selectedActivityId, phases, flows]);
+  }, [activities, activeFilters, activeTab, flows, selectedActivityId, getDownstreamPath, getOpacity, getUpstreamPath]);
 
   // --- NAVEGACIÓN Y SEGURIDAD ---
   const handleEditorTabClick = () => {
@@ -349,6 +439,11 @@ export default function App() {
     setSelectedActivityId(null);
     setLines([]);
     setIsEditingActivity(null);
+    setInsertBeforeId(null);
+    setInsertPhaseId(null);
+    setIsDraggingNewActivity(false);
+    setDraggedActivityId(null);
+    setDragDropTarget('none');
     setTempFilters({ flow: 'all', role: 'all' });
     setActiveFilters({ flow: 'all', role: 'all' });
     setFormData({ text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
@@ -356,40 +451,6 @@ export default function App() {
 
   const applyFilters = () => { setActiveFilters(tempFilters); setSelectedActivityId(null); };
   const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setSelectedActivityId(null); };
-
-  const getDownstreamPath = (startId, allActs = activities) => {
-    let path = new Set([startId]);
-    let queue = [startId];
-    while(queue.length > 0) {
-      const current = queue.shift();
-      const children = allActs.filter(a => a.predecessors.includes(current));
-      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
-    }
-    return path;
-  };
-
-  const getUpstreamPath = (startId, allActs = activities) => {
-    let path = new Set([startId]);
-    const findParents = (id) => {
-      const act = allActs.find(a => a.id === id);
-      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
-    };
-    findParents(startId);
-    return path;
-  };
-
-  const getOpacity = (act) => {
-    const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
-    const matchesRole = activeFilters.role === 'all' || act.role === activeFilters.role;
-    if (!matchesFlow || !matchesRole) return 'hidden';
-    if (selectedActivityId) {
-      const downstream = getDownstreamPath(selectedActivityId);
-      const upstream = getUpstreamPath(selectedActivityId);
-      if (downstream.has(act.id) || upstream.has(act.id)) return 'opacity-100 scale-100';
-      return 'opacity-20 grayscale';
-    }
-    return 'opacity-100';
-  };
 
   // --- CRUD A FIREBASE (Guardado en Tiempo Real) ---
 
@@ -478,23 +539,189 @@ export default function App() {
   const updateFlowLabel = async (id, newLabel) => {
       await setDoc(doc(db, getStageColPath(activeStage, 'flows'), id), { label: newLabel }, { merge: true });
   };
+
+  const resetForm = () => {
+    setIsEditingActivity(null);
+    setInsertBeforeId(null);
+    setInsertPhaseId(null);
+    setDragDropTarget('none');
+    setIsDraggingNewActivity(false);
+    setDraggedActivityId(null);
+    setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+  };
+
+  const getOrderedActivitiesForPhase = (phaseId, excludeActivityId = null) => {
+    return getPhaseSortedActivities(phaseId).filter(activity => activity.id !== excludeActivityId);
+  };
+
+  const rebalancePhaseOrderIndexes = async (phaseId, excludeActivityId = null) => {
+    const phaseActivities = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const batch = writeBatch(db);
+    phaseActivities.forEach((activity, index) => {
+      const order_index = (index + 1) * ORDER_GAP;
+      if (activity.order_index !== order_index) {
+        batch.set(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()), { order_index }, { merge: true });
+      }
+    });
+    await batch.commit();
+  };
+
+  const calculateOrderIndex = async (phaseId, beforeActivityId = null, excludeActivityId = null) => {
+    const phaseActivities = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const targetIndex = beforeActivityId === null
+      ? phaseActivities.length
+      : phaseActivities.findIndex(activity => activity.id === beforeActivityId);
+
+    const insertionIndex = targetIndex === -1 ? phaseActivities.length : targetIndex;
+    const prev = phaseActivities[insertionIndex - 1] || null;
+    const next = phaseActivities[insertionIndex] || null;
+
+    const prevOrder = prev ? prev.order_index : null;
+    const nextOrder = next ? next.order_index : null;
+
+    if (prevOrder === null && nextOrder === null) return ORDER_GAP;
+    if (prevOrder !== null && nextOrder === null) return prevOrder + ORDER_GAP;
+    if (prevOrder === null && nextOrder !== null) return nextOrder - ORDER_GAP;
+
+    const midpoint = (prevOrder + nextOrder) / 2;
+    if ((nextOrder - prevOrder) > 0.0001) return midpoint;
+
+    await rebalancePhaseOrderIndexes(phaseId, excludeActivityId);
+    const rebalanced = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const idx = beforeActivityId === null
+      ? rebalanced.length
+      : rebalanced.findIndex(activity => activity.id === beforeActivityId);
+    const safeIndex = idx === -1 ? rebalanced.length : idx;
+    const prevRebalanced = rebalanced[safeIndex - 1] || null;
+    const nextRebalanced = rebalanced[safeIndex] || null;
+    if (!prevRebalanced && !nextRebalanced) return ORDER_GAP;
+    if (prevRebalanced && !nextRebalanced) return prevRebalanced.order_index + ORDER_GAP;
+    if (!prevRebalanced && nextRebalanced) return nextRebalanced.order_index - ORDER_GAP;
+    return (prevRebalanced.order_index + nextRebalanced.order_index) / 2;
+  };
+
+  const startNewActivityDrag = (event) => {
+    resetForm();
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('text/plain', 'new');
+    setIsDraggingNewActivity(true);
+  };
+
+  const endNewActivityDrag = () => {
+    setIsDraggingNewActivity(false);
+    setDragDropTarget('none');
+  };
+
+  const startActivityDrag = (event, activityId) => {
+    setDraggedActivityId(activityId);
+    setIsDraggingNewActivity(false);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `existing:${activityId}`);
+  };
+
+  const endActivityDrag = () => {
+    setDraggedActivityId(null);
+    setDragDropTarget('none');
+  };
+
+  const handleDragOverInsertion = (event, targetId, phaseId) => {
+    if (!isDraggingNewActivity && !draggedActivityId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = isDraggingNewActivity ? 'copy' : 'move';
+    setDragDropTarget(getTargetKey(targetId, phaseId));
+  };
+
+  const moveExistingActivity = async (activityId, targetBeforeId, targetPhaseId, keepSelection = true) => {
+    const movingActivity = activities.find(activity => activity.id === activityId);
+    if (!movingActivity) return;
+    if (targetBeforeId === activityId) return;
+
+    const nextOrderIndex = await calculateOrderIndex(targetPhaseId, targetBeforeId, activityId);
+    await setDoc(
+      doc(db, getStageColPath(activeStage, 'activities'), activityId.toString()),
+      { phaseId: targetPhaseId, order_index: nextOrderIndex },
+      { merge: true }
+    );
+
+    if (keepSelection) {
+      setIsEditingActivity(activityId);
+      setSelectedActivityId(activityId);
+    }
+  };
+
+  const moveActivityByStep = async (activityId, direction) => {
+    const activity = activities.find(item => item.id === activityId);
+    if (!activity) return;
+
+    const phaseActivities = getPhaseSortedActivities(activity.phaseId);
+    const currentIndex = phaseActivities.findIndex(item => item.id === activityId);
+    if (currentIndex === -1) return;
+
+    if (direction === 'up') {
+      if (currentIndex === 0) return;
+      const targetBeforeId = phaseActivities[currentIndex - 1].id;
+      await moveExistingActivity(activityId, targetBeforeId, activity.phaseId, true);
+      return;
+    }
+
+    if (currentIndex >= phaseActivities.length - 1) return;
+    const targetBeforeId = phaseActivities[currentIndex + 2]?.id ?? null;
+    await moveExistingActivity(activityId, targetBeforeId, activity.phaseId, true);
+  };
+
+  const handleDropInsertion = async (event, targetId, phaseId) => {
+    if (!isDraggingNewActivity && !draggedActivityId) return;
+    event.preventDefault();
+    setDragDropTarget(getTargetKey(targetId, phaseId));
+
+    if (draggedActivityId) {
+      await moveExistingActivity(draggedActivityId, targetId, phaseId, true);
+      setDraggedActivityId(null);
+      return;
+    }
+
+    setInsertBeforeId(targetId);
+    setInsertPhaseId(phaseId);
+    setIsDraggingNewActivity(false);
+    setFormData(current => ({ ...current, phaseId }));
+  };
   
   const handleSaveActivity = async () => {
     let preds = formData.predecessors;
     if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
     
     const newActivity = { ...formData, predecessors: preds };
-    const docId = isEditingActivity ? isEditingActivity.toString() : (Math.max(0, ...activities.map(a => a.id)) + 1).toString();
-    newActivity.id = parseInt(docId);
 
-    await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
-    
-    setIsEditingActivity(null);
-    setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+    if (isEditingActivity) {
+      const docId = isEditingActivity.toString();
+      const currentActivity = activities.find(activity => activity.id === isEditingActivity);
+      newActivity.id = parseInt(docId);
+      if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
+        newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
+      } else {
+        newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
+      }
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
+    } else {
+      const phaseId = insertPhaseId || newActivity.phaseId;
+      const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
+      const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
+      const docId = nextId.toString();
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
+        ...newActivity,
+        id: nextId,
+        phaseId,
+        order_index,
+      });
+    }
+
+    resetForm();
   };
 
   const startEdit = (activity) => {
     setIsEditingActivity(activity.id);
+    setInsertBeforeId(null);
+    setInsertPhaseId(null);
     setFormData({ ...activity, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
     setActiveTab('editor');
   };
@@ -518,6 +745,7 @@ export default function App() {
     const phaseObj = phases.find(p => p.id === activity.phaseId);
     const phaseColor = getPhaseHexColor(phaseObj);
     const isDecision = activity.type === 'decision';
+    const displayNumber = displayOrderByActivityId[activity.id] || 0;
     
     const shapeClasses = isDecision 
         ? 'w-10 h-10 rotate-45 border-2 rounded-sm text-white' 
@@ -536,12 +764,12 @@ export default function App() {
             className={`flex items-center justify-center font-bold text-xs cursor-pointer transition-transform duration-200 hover:scale-110 active:scale-95 shadow-sm ${shapeClasses} ${isSelected ? 'ring-4 ring-offset-2 ring-blue-300' : ''}`}
             style={customStyle}
         >
-            <span className={`${contentRotate}`}>{activity.id}</span>
+            <span className={`${contentRotate}`}>{displayNumber}</span>
         </div>
         <div className={`absolute left-16 top-1/2 -translate-y-1/2 w-72 bg-white rounded-xl shadow-2xl border border-slate-100 transition-all duration-300 pointer-events-none origin-left z-[101] ${isSelected ? 'opacity-100 scale-100 translate-x-0' : 'opacity-0 scale-95 -translate-x-4 pointer-events-none'}`}>
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
             <div className="flex justify-between items-center p-3 border-b border-slate-50 bg-slate-50/50 rounded-t-xl">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isDecision ? 'Decisión' : 'Actividad'} #{activity.id}</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isDecision ? 'Decisión' : 'Actividad'} #{displayNumber}</span>
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${roleBadges[activity.role] || 'bg-slate-100'}`}>{activity.role}</span>
             </div>
             <div className="p-4">
@@ -714,7 +942,7 @@ export default function App() {
                           <div className="w-px h-full bg-slate-200 absolute top-full mt-0 -z-10"></div>
                       </div>
                       <div className="flex-1 w-full flex flex-col items-center pb-20 pt-4 space-y-4">
-                          {activities.filter(a => a.phaseId === phase.id).map(act => (
+                          {getPhaseSortedActivities(phase.id).map(act => (
                               <NodeCard key={act.id} activity={act} />
                           ))}
                       </div>
@@ -734,7 +962,7 @@ export default function App() {
              <div className="flex-1 h-full overflow-y-auto bg-slate-50/50 p-6 md:p-10 scroll-smooth relative" onClick={() => setSelectedActivityId(null)}>
                 <div className="max-w-6xl mx-auto space-y-12 pb-24">
                     {phases.map((phase, index) => {
-                        const phaseActivities = activities.filter(a => a.phaseId === phase.id);
+                        const phaseActivities = getPhaseSortedActivities(phase.id);
                         if(phaseActivities.length === 0) return null;
                         
                         const phaseColor = getPhaseHexColor(phase);
@@ -763,7 +991,7 @@ export default function App() {
                                                 {/* Header de la Tarjeta */}
                                                 <div className="flex justify-between items-start mb-3 pl-2">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">ID: {act.id}</span>
+                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">N°: {displayOrderByActivityId[act.id] || 0}</span>
                                                         <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[act.role] || 'bg-slate-100 text-slate-600'}`}>
                                                             {act.role}
                                                         </span>
@@ -866,20 +1094,102 @@ export default function App() {
                   </div>
                 )}
                 {managementMode === 'activities' && (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                      <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-xs text-slate-400 uppercase tracking-wider">Inventario</h3>
-                        <button onClick={() => { setIsEditingActivity(null); setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' }); }} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md font-bold hover:bg-blue-700 shadow-sm transition-all">+ Nueva</button>
+                        <button
+                          draggable
+                          onDragStart={startNewActivityDrag}
+                          onDragEnd={endNewActivityDrag}
+                          onClick={resetForm}
+                          className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md font-bold hover:bg-blue-700 shadow-sm transition-all cursor-grab active:cursor-grabbing"
+                          title="Arrastra para insertar por posición o haz click para agregar al final"
+                        >
+                          + Nueva
+                        </button>
                      </div>
-                     {activities.map(act => (
-                        <div key={act.id} onClick={() => startEdit(act)} className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''}`}>
-                            <div className="pr-6">
-                                <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
-                                <span className="text-[10px] text-slate-400">ID: {act.id}</span>
+                     {phases.map((phase) => {
+                        const phaseActivities = getPhaseSortedActivities(phase.id);
+                        const phaseColor = getPhaseHexColor(phase);
+                        return (
+                          <div key={phase.id} className="rounded-lg border border-slate-200 bg-slate-50/60 p-2">
+                            <div className="px-2 py-1.5 text-[10px] font-black uppercase tracking-wider" style={{ color: phaseColor }}>
+                              {phase.title}
                             </div>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
-                        </div>
-                     ))}
+
+                            {(isDraggingNewActivity || draggedActivityId) && phaseActivities.length > 0 && (
+                              <div
+                                onDragOver={(event) => handleDragOverInsertion(event, phaseActivities[0].id, phase.id)}
+                                onDrop={(event) => handleDropInsertion(event, phaseActivities[0].id, phase.id)}
+                                className={`mb-1 h-8 rounded-md border-2 border-dashed text-[11px] font-bold transition-all flex items-center justify-center ${dragDropTarget === getTargetKey(phaseActivities[0].id, phase.id) ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-200 text-slate-400 bg-white'}`}
+                              >
+                                Insertar al inicio de {phase.title}
+                              </div>
+                            )}
+
+                            {phaseActivities.map((act, index) => (
+                              <React.Fragment key={act.id}>
+                                {(isDraggingNewActivity || draggedActivityId) && (
+                                  <div
+                                    onDragOver={(event) => handleDragOverInsertion(event, act.id, phase.id)}
+                                    onDrop={(event) => handleDropInsertion(event, act.id, phase.id)}
+                                    className={`h-3 rounded transition-all ${dragDropTarget === getTargetKey(act.id, phase.id) ? 'bg-emerald-200' : 'bg-transparent'}`}
+                                  />
+                                )}
+                                <div
+                                  draggable
+                                  onDragStart={(event) => startActivityDrag(event, act.id)}
+                                  onDragEnd={endActivityDrag}
+                                  onClick={() => startEdit(act)}
+                                  className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
+                                >
+                                    <div className="pr-6">
+                                        <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
+                                        <span className="text-[10px] text-slate-400">N°: {displayOrderByActivityId[act.id] || 0}</span>
+                                    </div>
+                                    <div className="absolute bottom-2 right-2 flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={index === 0}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          moveActivityByStep(act.id, 'up');
+                                        }}
+                                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        title="Mover arriba"
+                                      >
+                                        <ChevronUp className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={index === phaseActivities.length - 1}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          moveActivityByStep(act.id, 'down');
+                                        }}
+                                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        title="Mover abajo"
+                                      >
+                                        <ChevronDown className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
+                                </div>
+                              </React.Fragment>
+                            ))}
+
+                            {(isDraggingNewActivity || draggedActivityId) && (
+                              <div
+                                onDragOver={(event) => handleDragOverInsertion(event, null, phase.id)}
+                                onDrop={(event) => handleDropInsertion(event, null, phase.id)}
+                                className={`mt-1 p-2 border-2 border-dashed rounded-lg text-[11px] font-bold transition-all ${dragDropTarget === getTargetKey(null, phase.id) ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-300 text-slate-500 bg-white'}`}
+                              >
+                                Soltar al final de {phase.title}
+                              </div>
+                            )}
+                          </div>
+                        );
+                     })}
                   </div>
                 )}
               </div>
@@ -891,6 +1201,11 @@ export default function App() {
                  {isEditingActivity ? <Edit2 className="w-5 h-5 text-blue-600"/> : <Plus className="w-5 h-5 text-emerald-600"/>}
                  {isEditingActivity ? `Editar Actividad #${isEditingActivity}` : 'Crear Nueva Actividad'}
                </h2>
+               {!isEditingActivity && insertBeforeId && (
+                  <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} en la posición del ID {insertBeforeId}.
+                  </div>
+               )}
                <div className="grid grid-cols-1 gap-5 max-w-2xl">
                   <div>
                       <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Fase del Proceso</label>
@@ -949,7 +1264,7 @@ export default function App() {
                   </div>
                   <div className="flex gap-3 mt-4">
                       <button onClick={handleSaveActivity} className="flex-1 bg-slate-900 text-white py-2.5 rounded-lg font-bold shadow-lg hover:bg-black transition-all transform active:scale-95 flex justify-center items-center gap-2"><Save className="w-4 h-4"/> Guardar Cambios</button>
-                      {isEditingActivity && (<button onClick={() => { setIsEditingActivity(null); setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' }); }} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
+                      {(isEditingActivity || insertBeforeId) && (<button onClick={resetForm} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
                   </div>
                </div>
             </div>
