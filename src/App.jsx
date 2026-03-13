@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { 
   Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
-  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch
+  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch, ChevronUp, ChevronDown
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -173,15 +173,37 @@ export default function App() {
   const [insertBeforeId, setInsertBeforeId] = useState(null);
   const [insertPhaseId, setInsertPhaseId] = useState(null);
   const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
+  const [draggedActivityId, setDraggedActivityId] = useState(null);
   const [dragDropTarget, setDragDropTarget] = useState('none');
 
+  const ORDER_GAP = 1024;
+  const phaseOrderMap = useMemo(
+    () => Object.fromEntries(phases.map((phase, index) => [phase.id, index])),
+    [phases]
+  );
+
   const sortedActivities = useMemo(
-    () => [...activities].sort((a, b) => b.id - a.id),
-    [activities]
+    () => [...activities].sort((a, b) => {
+      const phaseOrderA = phaseOrderMap[a.phaseId] ?? Number.MAX_SAFE_INTEGER;
+      const phaseOrderB = phaseOrderMap[b.phaseId] ?? Number.MAX_SAFE_INTEGER;
+      if (phaseOrderA !== phaseOrderB) return phaseOrderA - phaseOrderB;
+      const aOrder = a.order_index ?? (a.id * ORDER_GAP);
+      const bOrder = b.order_index ?? (b.id * ORDER_GAP);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return a.id - b.id;
+    }),
+    [activities, phaseOrderMap]
   );
 
   const getPhaseSortedActivities = (phaseId) => sortedActivities.filter(activity => activity.phaseId === phaseId);
   const getTargetKey = (targetId, phaseId) => (targetId === null ? `end:${phaseId}` : `before:${targetId}`);
+  const displayOrderByActivityId = useMemo(() => {
+    const result = {};
+    sortedActivities.forEach((activity, index) => {
+      result[activity.id] = index + 1;
+    });
+    return result;
+  }, [sortedActivities]);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -420,6 +442,7 @@ export default function App() {
     setInsertBeforeId(null);
     setInsertPhaseId(null);
     setIsDraggingNewActivity(false);
+    setDraggedActivityId(null);
     setDragDropTarget('none');
     setTempFilters({ flow: 'all', role: 'all' });
     setActiveFilters({ flow: 'all', role: 'all' });
@@ -523,13 +546,64 @@ export default function App() {
     setInsertPhaseId(null);
     setDragDropTarget('none');
     setIsDraggingNewActivity(false);
+    setDraggedActivityId(null);
     setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+  };
+
+  const getOrderedActivitiesForPhase = (phaseId, excludeActivityId = null) => {
+    return getPhaseSortedActivities(phaseId).filter(activity => activity.id !== excludeActivityId);
+  };
+
+  const rebalancePhaseOrderIndexes = async (phaseId, excludeActivityId = null) => {
+    const phaseActivities = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const batch = writeBatch(db);
+    phaseActivities.forEach((activity, index) => {
+      const order_index = (index + 1) * ORDER_GAP;
+      if (activity.order_index !== order_index) {
+        batch.set(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()), { order_index }, { merge: true });
+      }
+    });
+    await batch.commit();
+  };
+
+  const calculateOrderIndex = async (phaseId, beforeActivityId = null, excludeActivityId = null) => {
+    const phaseActivities = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const targetIndex = beforeActivityId === null
+      ? phaseActivities.length
+      : phaseActivities.findIndex(activity => activity.id === beforeActivityId);
+
+    const insertionIndex = targetIndex === -1 ? phaseActivities.length : targetIndex;
+    const prev = phaseActivities[insertionIndex - 1] || null;
+    const next = phaseActivities[insertionIndex] || null;
+
+    const prevOrder = prev ? prev.order_index : null;
+    const nextOrder = next ? next.order_index : null;
+
+    if (prevOrder === null && nextOrder === null) return ORDER_GAP;
+    if (prevOrder !== null && nextOrder === null) return prevOrder + ORDER_GAP;
+    if (prevOrder === null && nextOrder !== null) return nextOrder - ORDER_GAP;
+
+    const midpoint = (prevOrder + nextOrder) / 2;
+    if ((nextOrder - prevOrder) > 0.0001) return midpoint;
+
+    await rebalancePhaseOrderIndexes(phaseId, excludeActivityId);
+    const rebalanced = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const idx = beforeActivityId === null
+      ? rebalanced.length
+      : rebalanced.findIndex(activity => activity.id === beforeActivityId);
+    const safeIndex = idx === -1 ? rebalanced.length : idx;
+    const prevRebalanced = rebalanced[safeIndex - 1] || null;
+    const nextRebalanced = rebalanced[safeIndex] || null;
+    if (!prevRebalanced && !nextRebalanced) return ORDER_GAP;
+    if (prevRebalanced && !nextRebalanced) return prevRebalanced.order_index + ORDER_GAP;
+    if (!prevRebalanced && nextRebalanced) return nextRebalanced.order_index - ORDER_GAP;
+    return (prevRebalanced.order_index + nextRebalanced.order_index) / 2;
   };
 
   const startNewActivityDrag = (event) => {
     resetForm();
     event.dataTransfer.effectAllowed = 'copy';
-    event.dataTransfer.setData('text/plain', 'new-activity');
+    event.dataTransfer.setData('text/plain', 'new');
     setIsDraggingNewActivity(true);
   };
 
@@ -538,51 +612,78 @@ export default function App() {
     setDragDropTarget('none');
   };
 
+  const startActivityDrag = (event, activityId) => {
+    setDraggedActivityId(activityId);
+    setIsDraggingNewActivity(false);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `existing:${activityId}`);
+  };
+
+  const endActivityDrag = () => {
+    setDraggedActivityId(null);
+    setDragDropTarget('none');
+  };
+
   const handleDragOverInsertion = (event, targetId, phaseId) => {
-    if (!isDraggingNewActivity) return;
+    if (!isDraggingNewActivity && !draggedActivityId) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
+    event.dataTransfer.dropEffect = isDraggingNewActivity ? 'copy' : 'move';
     setDragDropTarget(getTargetKey(targetId, phaseId));
   };
 
-  const handleDropInsertion = (event, targetId, phaseId) => {
-    if (!isDraggingNewActivity) return;
+  const moveExistingActivity = async (activityId, targetBeforeId, targetPhaseId, keepSelection = true) => {
+    const movingActivity = activities.find(activity => activity.id === activityId);
+    if (!movingActivity) return;
+    if (targetBeforeId === activityId) return;
+
+    const nextOrderIndex = await calculateOrderIndex(targetPhaseId, targetBeforeId, activityId);
+    await setDoc(
+      doc(db, getStageColPath(activeStage, 'activities'), activityId.toString()),
+      { phaseId: targetPhaseId, order_index: nextOrderIndex },
+      { merge: true }
+    );
+
+    if (keepSelection) {
+      setIsEditingActivity(activityId);
+      setSelectedActivityId(activityId);
+    }
+  };
+
+  const moveActivityByStep = async (activityId, direction) => {
+    const activity = activities.find(item => item.id === activityId);
+    if (!activity) return;
+
+    const phaseActivities = getPhaseSortedActivities(activity.phaseId);
+    const currentIndex = phaseActivities.findIndex(item => item.id === activityId);
+    if (currentIndex === -1) return;
+
+    if (direction === 'up') {
+      if (currentIndex === 0) return;
+      const targetBeforeId = phaseActivities[currentIndex - 1].id;
+      await moveExistingActivity(activityId, targetBeforeId, activity.phaseId, true);
+      return;
+    }
+
+    if (currentIndex >= phaseActivities.length - 1) return;
+    const targetBeforeId = phaseActivities[currentIndex + 2]?.id ?? null;
+    await moveExistingActivity(activityId, targetBeforeId, activity.phaseId, true);
+  };
+
+  const handleDropInsertion = async (event, targetId, phaseId) => {
+    if (!isDraggingNewActivity && !draggedActivityId) return;
     event.preventDefault();
+    setDragDropTarget(getTargetKey(targetId, phaseId));
+
+    if (draggedActivityId) {
+      await moveExistingActivity(draggedActivityId, targetId, phaseId, true);
+      setDraggedActivityId(null);
+      return;
+    }
+
     setInsertBeforeId(targetId);
     setInsertPhaseId(phaseId);
-    setDragDropTarget(getTargetKey(targetId, phaseId));
     setIsDraggingNewActivity(false);
     setFormData(current => ({ ...current, phaseId }));
-  };
-
-  const remapId = (currentId, threshold) => (currentId >= threshold ? currentId + 1 : currentId);
-
-  const saveActivitiesWithReindex = async (newActivity, insertionId, phaseId) => {
-    const sortedByIdAsc = [...activities].sort((a, b) => a.id - b.id);
-    const nextId = insertionId || (Math.max(0, ...activities.map(a => a.id)) + 1);
-    const reindexedExisting = sortedByIdAsc.map(activity => ({
-      ...activity,
-      id: remapId(activity.id, nextId),
-      predecessors: (activity.predecessors || []).map(predId => remapId(predId, nextId)),
-    }));
-
-    const newActivityWithId = {
-      ...newActivity,
-      id: nextId,
-      phaseId: phaseId || newActivity.phaseId,
-      predecessors: (newActivity.predecessors || []).map(predId => remapId(predId, nextId)),
-    };
-
-    const batch = writeBatch(db);
-    sortedByIdAsc.forEach(activity => {
-      batch.delete(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()));
-    });
-
-    [...reindexedExisting, newActivityWithId].forEach(activity => {
-      batch.set(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()), activity);
-    });
-
-    await batch.commit();
   };
   
   const handleSaveActivity = async () => {
@@ -593,10 +694,25 @@ export default function App() {
 
     if (isEditingActivity) {
       const docId = isEditingActivity.toString();
+      const currentActivity = activities.find(activity => activity.id === isEditingActivity);
       newActivity.id = parseInt(docId);
+      if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
+        newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
+      } else {
+        newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
+      }
       await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
     } else {
-      await saveActivitiesWithReindex(newActivity, insertBeforeId, insertPhaseId);
+      const phaseId = insertPhaseId || newActivity.phaseId;
+      const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
+      const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
+      const docId = nextId.toString();
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
+        ...newActivity,
+        id: nextId,
+        phaseId,
+        order_index,
+      });
     }
 
     resetForm();
@@ -1001,7 +1117,7 @@ export default function App() {
                               {phase.title}
                             </div>
 
-                            {isDraggingNewActivity && phaseActivities.length > 0 && (
+                            {(isDraggingNewActivity || draggedActivityId) && phaseActivities.length > 0 && (
                               <div
                                 onDragOver={(event) => handleDragOverInsertion(event, phaseActivities[0].id, phase.id)}
                                 onDrop={(event) => handleDropInsertion(event, phaseActivities[0].id, phase.id)}
@@ -1011,9 +1127,9 @@ export default function App() {
                               </div>
                             )}
 
-                            {phaseActivities.map(act => (
+                            {phaseActivities.map((act, index) => (
                               <React.Fragment key={act.id}>
-                                {isDraggingNewActivity && (
+                                {(isDraggingNewActivity || draggedActivityId) && (
                                   <div
                                     onDragOver={(event) => handleDragOverInsertion(event, act.id, phase.id)}
                                     onDrop={(event) => handleDropInsertion(event, act.id, phase.id)}
@@ -1021,19 +1137,48 @@ export default function App() {
                                   />
                                 )}
                                 <div
+                                  draggable
+                                  onDragStart={(event) => startActivityDrag(event, act.id)}
+                                  onDragEnd={endActivityDrag}
                                   onClick={() => startEdit(act)}
-                                  className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''}`}
+                                  className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
                                 >
                                     <div className="pr-6">
                                         <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
-                                        <span className="text-[10px] text-slate-400">ID: {act.id}</span>
+                                        <span className="text-[10px] text-slate-400">N°: {displayOrderByActivityId[act.id] || 0}</span>
+                                    </div>
+                                    <div className="absolute bottom-2 right-2 flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={index === 0}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          moveActivityByStep(act.id, 'up');
+                                        }}
+                                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        title="Mover arriba"
+                                      >
+                                        <ChevronUp className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={index === phaseActivities.length - 1}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          moveActivityByStep(act.id, 'down');
+                                        }}
+                                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        title="Mover abajo"
+                                      >
+                                        <ChevronDown className="w-3 h-3" />
+                                      </button>
                                     </div>
                                     <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
                                 </div>
                               </React.Fragment>
                             ))}
 
-                            {isDraggingNewActivity && (
+                            {(isDraggingNewActivity || draggedActivityId) && (
                               <div
                                 onDragOver={(event) => handleDragOverInsertion(event, null, phase.id)}
                                 onDrop={(event) => handleDropInsertion(event, null, phase.id)}
