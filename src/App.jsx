@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { 
   Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
   CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch
@@ -170,6 +170,13 @@ export default function App() {
   const [formData, setFormData] = useState({
     text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: ''
   });
+  const [insertBeforeId, setInsertBeforeId] = useState(null);
+  const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
+
+  const sortedActivities = useMemo(
+    () => [...activities].sort((a, b) => b.id - a.id),
+    [activities]
+  );
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -478,23 +485,62 @@ export default function App() {
   const updateFlowLabel = async (id, newLabel) => {
       await setDoc(doc(db, getStageColPath(activeStage, 'flows'), id), { label: newLabel }, { merge: true });
   };
+
+  const resetForm = () => {
+    setIsEditingActivity(null);
+    setInsertBeforeId(null);
+    setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+  };
+
+  const remapId = (currentId, threshold) => (currentId >= threshold ? currentId + 1 : currentId);
+
+  const saveActivitiesWithReindex = async (newActivity, insertionId) => {
+    const sortedByIdAsc = [...activities].sort((a, b) => a.id - b.id);
+    const nextId = insertionId || (Math.max(0, ...activities.map(a => a.id)) + 1);
+    const reindexedExisting = sortedByIdAsc.map(activity => ({
+      ...activity,
+      id: remapId(activity.id, nextId),
+      predecessors: (activity.predecessors || []).map(predId => remapId(predId, nextId)),
+    }));
+
+    const newActivityWithId = {
+      ...newActivity,
+      id: nextId,
+      predecessors: (newActivity.predecessors || []).map(predId => remapId(predId, nextId)),
+    };
+
+    const batch = writeBatch(db);
+    sortedByIdAsc.forEach(activity => {
+      batch.delete(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()));
+    });
+
+    [...reindexedExisting, newActivityWithId].forEach(activity => {
+      batch.set(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()), activity);
+    });
+
+    await batch.commit();
+  };
   
   const handleSaveActivity = async () => {
     let preds = formData.predecessors;
     if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
     
     const newActivity = { ...formData, predecessors: preds };
-    const docId = isEditingActivity ? isEditingActivity.toString() : (Math.max(0, ...activities.map(a => a.id)) + 1).toString();
-    newActivity.id = parseInt(docId);
 
-    await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
-    
-    setIsEditingActivity(null);
-    setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+    if (isEditingActivity) {
+      const docId = isEditingActivity.toString();
+      newActivity.id = parseInt(docId);
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
+    } else {
+      await saveActivitiesWithReindex(newActivity, insertBeforeId);
+    }
+
+    resetForm();
   };
 
   const startEdit = (activity) => {
     setIsEditingActivity(activity.id);
+    setInsertBeforeId(null);
     setFormData({ ...activity, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
     setActiveTab('editor');
   };
@@ -714,7 +760,7 @@ export default function App() {
                           <div className="w-px h-full bg-slate-200 absolute top-full mt-0 -z-10"></div>
                       </div>
                       <div className="flex-1 w-full flex flex-col items-center pb-20 pt-4 space-y-4">
-                          {activities.filter(a => a.phaseId === phase.id).map(act => (
+                          {sortedActivities.filter(a => a.phaseId === phase.id).map(act => (
                               <NodeCard key={act.id} activity={act} />
                           ))}
                       </div>
@@ -734,7 +780,7 @@ export default function App() {
              <div className="flex-1 h-full overflow-y-auto bg-slate-50/50 p-6 md:p-10 scroll-smooth relative" onClick={() => setSelectedActivityId(null)}>
                 <div className="max-w-6xl mx-auto space-y-12 pb-24">
                     {phases.map((phase, index) => {
-                        const phaseActivities = activities.filter(a => a.phaseId === phase.id);
+                        const phaseActivities = sortedActivities.filter(a => a.phaseId === phase.id);
                         if(phaseActivities.length === 0) return null;
                         
                         const phaseColor = getPhaseHexColor(phase);
@@ -869,10 +915,37 @@ export default function App() {
                   <div className="space-y-2">
                      <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-xs text-slate-400 uppercase tracking-wider">Inventario</h3>
-                        <button onClick={() => { setIsEditingActivity(null); setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' }); }} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md font-bold hover:bg-blue-700 shadow-sm transition-all">+ Nueva</button>
+                        <button
+                          draggable
+                          onDragStart={() => {
+                            resetForm();
+                            setIsDraggingNewActivity(true);
+                          }}
+                          onDragEnd={() => setIsDraggingNewActivity(false)}
+                          onClick={resetForm}
+                          className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md font-bold hover:bg-blue-700 shadow-sm transition-all cursor-grab active:cursor-grabbing"
+                          title="Arrastra para insertar por posición o haz click para agregar al final"
+                        >
+                          + Nueva
+                        </button>
                      </div>
-                     {activities.map(act => (
-                        <div key={act.id} onClick={() => startEdit(act)} className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''}`}>
+                     {sortedActivities.map(act => (
+                        <div
+                          key={act.id}
+                          onDragOver={(e) => {
+                            if (!isDraggingNewActivity) return;
+                            e.preventDefault();
+                            setInsertBeforeId(act.id);
+                          }}
+                          onDrop={(e) => {
+                            if (!isDraggingNewActivity) return;
+                            e.preventDefault();
+                            setInsertBeforeId(act.id);
+                            setIsDraggingNewActivity(false);
+                          }}
+                          onClick={() => startEdit(act)}
+                          className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''}`}
+                        >
                             <div className="pr-6">
                                 <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
                                 <span className="text-[10px] text-slate-400">ID: {act.id}</span>
@@ -880,6 +953,19 @@ export default function App() {
                             <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
                         </div>
                      ))}
+                     {isDraggingNewActivity && (
+                        <div
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setInsertBeforeId(null);
+                            setIsDraggingNewActivity(false);
+                          }}
+                          className="p-3 border-2 border-dashed border-emerald-300 rounded-lg text-[11px] font-bold text-emerald-700 bg-emerald-50"
+                        >
+                          Soltar aquí para agregar al final
+                        </div>
+                     )}
                   </div>
                 )}
               </div>
@@ -891,6 +977,11 @@ export default function App() {
                  {isEditingActivity ? <Edit2 className="w-5 h-5 text-blue-600"/> : <Plus className="w-5 h-5 text-emerald-600"/>}
                  {isEditingActivity ? `Editar Actividad #${isEditingActivity}` : 'Crear Nueva Actividad'}
                </h2>
+               {!isEditingActivity && insertBeforeId && (
+                  <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                    La nueva actividad se insertará en la posición del ID {insertBeforeId}.
+                  </div>
+               )}
                <div className="grid grid-cols-1 gap-5 max-w-2xl">
                   <div>
                       <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Fase del Proceso</label>
@@ -949,7 +1040,7 @@ export default function App() {
                   </div>
                   <div className="flex gap-3 mt-4">
                       <button onClick={handleSaveActivity} className="flex-1 bg-slate-900 text-white py-2.5 rounded-lg font-bold shadow-lg hover:bg-black transition-all transform active:scale-95 flex justify-center items-center gap-2"><Save className="w-4 h-4"/> Guardar Cambios</button>
-                      {isEditingActivity && (<button onClick={() => { setIsEditingActivity(null); setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' }); }} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
+                      {(isEditingActivity || insertBeforeId) && (<button onClick={resetForm} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
                   </div>
                </div>
             </div>
