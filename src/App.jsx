@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { 
-  Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
+  Layout, Plus, Trash2, Edit2, Save, Network, Clock, Filter, 
   CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch, ChevronUp, ChevronDown
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch, getDocs } from "firebase/firestore";
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 const firebaseConfig = {
@@ -27,6 +27,7 @@ const db = getFirestore(app);
 // Rutas de colección para la base de datos
 const APP_ID = 'mapa-cecp-app';
 const getStageColPath = (stageId, colName) => `artifacts/${APP_ID}/public/data/stages/${stageId}/${colName}`;
+const getRolesColPath = () => `artifacts/${APP_ID}/public/data/roles`;
 const ACTIVITY_REF_PREFIX = 'ACT-';
 const formatActivityRef = (value) => `${ACTIVITY_REF_PREFIX}${String(value).padStart(3, '0')}`;
 const getActivityRefNumber = (activityRef = '') => {
@@ -117,20 +118,40 @@ const stageDefaults = {
   }
 };
 
-const availableRoles = ['GT', 'GA', 'GOM', 'GCA', 'DC', 'GP', 'Director', 'Sistema'];
+const roleDefaults = [
+  { id: 'role_gt', name: 'GT', color: '#dbeafe', textColor: '#1d4ed8' },
+  { id: 'role_ga', name: 'GA', color: '#d1fae5', textColor: '#047857' },
+  { id: 'role_gom', name: 'GOM', color: '#fef3c7', textColor: '#b45309' },
+  { id: 'role_gca', name: 'GCA', color: '#f3e8ff', textColor: '#7e22ce' },
+  { id: 'role_dc', name: 'DC', color: '#ffe4e6', textColor: '#be123c' },
+  { id: 'role_gp', name: 'GP', color: '#cffafe', textColor: '#0e7490' },
+  { id: 'role_director', name: 'Director', color: '#f1f5f9', textColor: '#334155' },
+  { id: 'role_sistema', name: 'Sistema', color: '#f3f4f6', textColor: '#374151' },
+];
 
-const roleBadges = {
-    'GT': 'bg-blue-100 text-blue-700',
-    'GA': 'bg-emerald-100 text-emerald-700',
-    'GOM': 'bg-amber-100 text-amber-700',
-    'GCA': 'bg-purple-100 text-purple-700',
-    'DC': 'bg-rose-100 text-rose-700',
-    'GP': 'bg-cyan-100 text-cyan-700',
-    'Director': 'bg-slate-100 text-slate-700',
-    'Sistema': 'bg-gray-100 text-gray-700',
-};
+const rolePalette = [
+  { color: '#dbeafe', textColor: '#1d4ed8' },
+  { color: '#d1fae5', textColor: '#047857' },
+  { color: '#fef3c7', textColor: '#b45309' },
+  { color: '#fce7f3', textColor: '#be185d' },
+  { color: '#e9d5ff', textColor: '#7e22ce' },
+  { color: '#cffafe', textColor: '#0e7490' },
+  { color: '#e0e7ff', textColor: '#4338ca' },
+  { color: '#fee2e2', textColor: '#b91c1c' },
+  { color: '#f1f5f9', textColor: '#334155' },
+];
 
 const ADMIN_PASSWORD = "admin123";
+
+const getReadableTextColor = (hexColor) => {
+  if (!hexColor || !hexColor.startsWith('#')) return '#334155';
+  const hex = hexColor.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.6 ? '#0f172a' : '#f8fafc';
+};
 
 // Función inteligente para migrar colores viejos de la base de datos a los nuevos códigos HEX
 const getPhaseHexColor = (phase) => {
@@ -142,6 +163,27 @@ const getPhaseHexColor = (phase) => {
     return matched ? oldColors[matched] : '#3b82f6';
 };
 
+const buildEmptyFormData = (phaseId = '') => ({
+  text: '',
+  role: '',
+  support_roles: [],
+  duration: '',
+  phaseId,
+  type: 'process',
+  predecessors: [],
+  flows: ['all'],
+  origin: '',
+  condition: '',
+  activity_roles: [],
+});
+
+const normalizeRole = (role) => {
+  const name = role.name || role.label || role.role || role.id || '';
+  const color = role.color || '#e2e8f0';
+  const textColor = role.textColor || getReadableTextColor(color);
+  return { ...role, name, color, textColor };
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('diagram_node');
   const [activeStage, setActiveStage] = useState('formulacion');
@@ -150,6 +192,7 @@ export default function App() {
   const [phases, setPhases] = useState([]);
   const [activities, setActivities] = useState([]);
   const [flows, setFlows] = useState([]);
+  const [roles, setRoles] = useState(() => roleDefaults.map(normalizeRole));
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
   
@@ -167,18 +210,18 @@ export default function App() {
   const [activeSearch, setActiveSearch] = useState('');
   const [selectedActivityId, setSelectedActivityId] = useState(null);
   const [lines, setLines] = useState([]);
+  const [roleDrafts, setRoleDrafts] = useState({});
   
   const nodeRefs = useRef({});
   const containerRef = useRef(null);
   const initializedRef = useRef({});
+  const rolesInitializedRef = useRef(false);
   const nextActivityRefCounter = useRef(1);
 
   // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
   const [managementMode, setManagementMode] = useState('activities');
-  const [formData, setFormData] = useState({
-    text: '', role: '', support_roles: [], duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: []
-  });
+  const [formData, setFormData] = useState(() => buildEmptyFormData(''));
   const [insertBeforeId, setInsertBeforeId] = useState(null);
   const [insertPhaseId, setInsertPhaseId] = useState(null);
   const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
@@ -189,6 +232,14 @@ export default function App() {
   const phaseOrderMap = useMemo(
     () => Object.fromEntries(phases.map((phase, index) => [phase.id, index])),
     [phases]
+  );
+  const roleByName = useMemo(
+    () => Object.fromEntries(roles.map(role => [role.name, role])),
+    [roles]
+  );
+  const availableRoles = useMemo(
+    () => roles.map(role => role.name),
+    [roles]
   );
 
   const sortedActivities = useMemo(
@@ -204,14 +255,35 @@ export default function App() {
     [activities, phaseOrderMap]
   );
 
-  const getPhaseSortedActivities = (phaseId) => sortedActivities.filter(activity => activity.phaseId === phaseId);
+  const activitiesByPhase = useMemo(() => {
+    const map = new Map();
+    sortedActivities.forEach(activity => {
+      if (!map.has(activity.phaseId)) map.set(activity.phaseId, []);
+      map.get(activity.phaseId).push(activity);
+    });
+    return map;
+  }, [sortedActivities]);
+  const getPhaseSortedActivities = (phaseId) => activitiesByPhase.get(phaseId) || [];
   const getActivityRoles = useCallback((activity) => {
     if (Array.isArray(activity.activity_roles) && activity.activity_roles.length > 0) return activity.activity_roles;
+    const roles = [];
     if (activity.role) {
-      return [{ id: `legacy-${activity.id}`, activity_id: activity.id, role_name: activity.role, role_type: 'PRIMARY' }];
+      roles.push({ id: `legacy-primary-${activity.id}`, activity_id: activity.id, role_name: activity.role, role_type: 'PRIMARY' });
     }
-    return [];
+    if (Array.isArray(activity.support_roles)) {
+      activity.support_roles.forEach((roleName, index) => {
+        roles.push({ id: `legacy-support-${activity.id}-${index}`, activity_id: activity.id, role_name: roleName, role_type: 'SUPPORT' });
+      });
+    }
+    return roles;
   }, []);
+  const getRoleBadgeStyle = useCallback((roleName) => {
+    if (!roleName) return { backgroundColor: '#f1f5f9', color: '#475569' };
+    const role = roleByName[roleName];
+    const color = role?.color || '#e2e8f0';
+    const textColor = role?.textColor || getReadableTextColor(color);
+    return { backgroundColor: color, color: textColor };
+  }, [roleByName]);
   const getPrimaryRoleName = useCallback((activity) => getActivityRoles(activity).find(role => role.role_type === 'PRIMARY')?.role_name || activity.role || '', [getActivityRoles]);
   const getSupportRoleNames = useCallback((activity) => getActivityRoles(activity).filter(role => role.role_type === 'SUPPORT').map(role => role.role_name), [getActivityRoles]);
   const normalizeActivityModel = useCallback((activity) => {
@@ -236,6 +308,16 @@ export default function App() {
     () => activities.reduce((max, activity) => Math.max(max, getActivityRefNumber(activity.activity_ref)), 0),
     [activities]
   );
+
+  useEffect(() => {
+    const roleSet = new Set(availableRoles);
+    if (tempFilters.role !== 'all' && !roleSet.has(tempFilters.role)) {
+      setTempFilters(current => ({ ...current, role: 'all' }));
+    }
+    if (activeFilters.role !== 'all' && !roleSet.has(activeFilters.role)) {
+      setActiveFilters(current => ({ ...current, role: 'all' }));
+    }
+  }, [availableRoles, tempFilters.role, activeFilters.role]);
 
   useEffect(() => {
     nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxActivityRefNumber + 1);
@@ -302,6 +384,30 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let isDisposed = false;
+    const rolesCol = collection(db, getRolesColPath());
+    const unsubscribe = onSnapshot(rolesCol, async (snapshot) => {
+      if (isDisposed) return;
+      let data = snapshot.docs.map(roleDoc => normalizeRole({ id: roleDoc.id, ...roleDoc.data() }));
+      if (data.length === 0 && !rolesInitializedRef.current) {
+        rolesInitializedRef.current = true;
+        const batch = writeBatch(db);
+        roleDefaults.forEach(role => batch.set(doc(db, getRolesColPath(), role.id), role));
+        await batch.commit();
+        data = roleDefaults.map(normalizeRole);
+      }
+      data.sort((a, b) => a.name.localeCompare(b.name));
+      setRoles(data);
+    }, (error) => console.error(error));
+
+    return () => {
+      isDisposed = true;
+      unsubscribe();
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -565,7 +671,7 @@ export default function App() {
     setActiveFilters({ flow: 'all', role: 'all' });
     setTempSearch('');
     setActiveSearch('');
-    setFormData({ text: '', role: '', support_roles: [], duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: [] });
+    setFormData(buildEmptyFormData(''));
   };
 
   const applyFilters = () => { setActiveFilters(tempFilters); setActiveSearch(tempSearch); setSelectedActivityId(null); };
@@ -659,6 +765,144 @@ export default function App() {
       await setDoc(doc(db, getStageColPath(activeStage, 'flows'), id), { label: newLabel }, { merge: true });
   };
 
+  const commitActivityRoleUpdates = async (updates) => {
+    const chunks = [];
+    for (let i = 0; i < updates.length; i += 450) {
+      chunks.push(updates.slice(i, i + 450));
+    }
+    for (const chunk of chunks) {
+      const batch = writeBatch(db);
+      chunk.forEach(({ stageId, activityId, data }) => {
+        batch.set(doc(db, getStageColPath(stageId, 'activities'), activityId), data, { merge: true });
+      });
+      await batch.acommit();
+    }
+  };
+
+  const renameRoleAcrossStages = async (oldName, newName) => {
+    if (!oldName || !newName || oldName === newName) return;
+    const updates = [];
+    for (const stage of processStages) {
+      const snapshot = await getDocs(collection(db, getStageColPath(stage.id, 'activities')));
+      snapshot.forEach((activityDoc) => {
+        const activity = activityDoc.data();
+        let changed = false;
+        const update = {};
+
+        if (activity.role === oldName) {
+          update.role = newName;
+          changed = true;
+        }
+
+        if (Array.isArray(activity.support_roles)) {
+          const updatedSupport = activity.support_roles.map(role => role === oldName ? newName : role);
+          if (updatedSupport.join('|') !== activity.support_roles.join('|')) {
+            update.support_roles = updatedSupport;
+            changed = true;
+          }
+        }
+
+        if (Array.isArray(activity.activity_roles)) {
+          const updatedRoles = activity.activity_roles.map(role => (
+            role.role_name === oldName ? { ...role, role_name: newName } : role
+          ));
+          if (JSON.stringify(updatedRoles) !== JSON.stringify(activity.activity_roles)) {
+            update.activity_roles = updatedRoles;
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          updates.push({ stageId: stage.id, activityId: activityDoc.id, data: update });
+        }
+      });
+    }
+    if (updates.length > 0) await commitActivityRoleUpdates(updates);
+  };
+
+  const removeRoleAcrossStages = async (roleName) => {
+    if (!roleName) return;
+    const updates = [];
+    for (const stage of processStages) {
+      const snapshot = await getDocs(collection(db, getStageColPath(stage.id, 'activities')));
+      snapshot.forEach((activityDoc) => {
+        const activity = activityDoc.data();
+        let changed = false;
+        const update = {};
+
+        if (activity.role === roleName) {
+          update.role = '';
+          changed = true;
+        }
+
+        if (Array.isArray(activity.support_roles)) {
+          const updatedSupport = activity.support_roles.filter(role => role !== roleName);
+          if (updatedSupport.length !== activity.support_roles.length) {
+            update.support_roles = updatedSupport;
+            changed = true;
+          }
+        }
+
+        if (Array.isArray(activity.activity_roles)) {
+          const updatedRoles = activity.activity_roles.filter(role => role.role_name !== roleName);
+          if (updatedRoles.length !== activity.activity_roles.length) {
+            update.activity_roles = updatedRoles;
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          updates.push({ stageId: stage.id, activityId: activityDoc.id, data: update });
+        }
+      });
+    }
+    if (updates.length > 0) await commitActivityRoleUpdates(updates);
+  };
+
+  const addRole = async () => {
+    const palette = rolePalette[roles.length % rolePalette.length];
+    const newRole = {
+      id: `role_${Date.now()}`,
+      name: 'Nuevo Rol',
+      color: palette.color,
+      textColor: palette.textColor,
+    };
+    await setDoc(doc(db, getRolesColPath(), newRole.id), newRole);
+    setRoleDrafts(current => ({ ...current, [newRole.id]: newRole.name }));
+  };
+
+  const updateRoleColor = async (roleId, newColor) => {
+    await setDoc(
+      doc(db, getRolesColPath(), roleId),
+      { color: newColor, textColor: getReadableTextColor(newColor) },
+      { merge: true }
+    );
+  };
+
+  const commitRoleRename = async (role, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === role.name) {
+      setRoleDrafts(current => ({ ...current, [role.id]: role.name }));
+      return;
+    }
+    await setDoc(doc(db, getRolesColPath(), role.id), { name: trimmed }, { merge: true });
+    await renameRoleAcrossStages(role.name, trimmed);
+    setRoleDrafts(current => ({ ...current, [role.id]: trimmed }));
+  };
+
+  const requestDeleteRole = (role) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Eliminar Rol',
+      message: `¿Eliminar el rol "${role.name}"? Se eliminará de todas las actividades.`,
+      onConfirm: async () => {
+        await deleteDoc(doc(db, getRolesColPath(), role.id));
+        await removeRoleAcrossStages(role.name);
+        setConfirmDialog({ isOpen: false });
+      }
+    });
+  };
+
   const resetForm = () => {
     setIsEditingActivity(null);
     setInsertBeforeId(null);
@@ -666,7 +910,7 @@ export default function App() {
     setDragDropTarget('none');
     setIsDraggingNewActivity(false);
     setDraggedActivityId(null);
-    setFormData({ text: '', role: '', support_roles: [], duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: [] });
+    setFormData(buildEmptyFormData(phases[0]?.id || ''));
   };
 
   const getOrderedActivitiesForPhase = (phaseId, excludeActivityId = null) => {
@@ -909,7 +1153,12 @@ export default function App() {
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
             <div className="flex justify-between items-center p-3 border-b border-slate-50 bg-slate-50/50 rounded-t-xl">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{activityRef} · #{displayNumber}</span>
-                <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase ring-1 ring-inset ring-white/60 ${roleBadges[primaryRole] || 'bg-slate-100'}`}>{primaryRole}</span>
+                <span
+                  className="text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase ring-1 ring-inset ring-white/60"
+                  style={getRoleBadgeStyle(primaryRole)}
+                >
+                  {primaryRole}
+                </span>
             </div>
             <div className="p-4">
                 <p className="text-sm font-medium text-slate-800 leading-snug mb-3">{activity.text}</p>
@@ -1136,9 +1385,11 @@ export default function App() {
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 pl-4 md:pl-14">
                                     {phaseActivities.map(act => {
                                         if (getOpacity(act) === 'hidden') return null;
-                                        
+                                        const primaryRoleName = getPrimaryRoleName(act);
+                                        const supportRoleNames = getSupportRoleNames(act);
+
                                         return (
-                                            <div key={act.id} className={`group relative rounded-xl shadow-sm border p-5 hover:shadow-md transition-all flex flex-col h-full overflow-hidden ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50 border-slate-200 hover:border-slate-300' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
+                                            <div key={act.id} className={`group relative rounded-xl shadow-sm border p-5 hover:shadow-md transition-all flex flex-col h-full overflow-hidden ${supportRoleNames.length > 0 ? 'bg-slate-50 border-slate-200 hover:border-slate-300' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
                                                 {/* Línea indicadora de herencia de color */}
                                                 <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: phaseColor }}></div>
                                                 
@@ -1147,8 +1398,11 @@ export default function App() {
                                                     <div className="flex items-center gap-2">
                                                         <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">{activityRefById[act.id] || `ID-${act.id}`}</span>
                                                         <span className="text-[10px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-md tracking-wider">#{displayOrderByActivityId[act.id] || 0}</span>
-                                                        <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
-                                                            {getPrimaryRoleName(act) || 'Sin rol'}
+                                                        <span
+                                                          className="text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider"
+                                                          style={getRoleBadgeStyle(primaryRoleName || '')}
+                                                        >
+                                                            {primaryRoleName || 'Sin rol'}
                                                         </span>
                                                     </div>
                                                     {act.duration && act.duration !== 'N/A' && (
@@ -1166,10 +1420,13 @@ export default function App() {
                                                 {/* Meta información compacta en el fondo de la tarjeta */}
                                                 <div className="flex flex-col gap-2 pl-2 mt-auto">
                                                     <div className="flex flex-wrap gap-1">
-                                                      <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
-                                                        Primary: {getPrimaryRoleName(act) || 'No definido'}
+                                                      <span
+                                                        className="text-[10px] px-2 py-1 rounded-md font-bold uppercase"
+                                                        style={getRoleBadgeStyle(primaryRoleName || '')}
+                                                      >
+                                                        Primary: {primaryRoleName || 'No definido'}
                                                       </span>
-                                                      {getSupportRoleNames(act).map(role => (
+                                                      {supportRoleNames.map(role => (
                                                         <span key={`${act.id}-${role}`} className="text-[10px] px-2 py-1 rounded-md font-medium bg-slate-100 text-slate-500 border border-slate-200">
                                                           Support: {role}
                                                         </span>
@@ -1221,6 +1478,7 @@ export default function App() {
                 <button onClick={() => setManagementMode('activities')} className={`flex-1 py-3 text-xs font-bold ${managementMode === 'activities' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>Actividades</button>
                 <button onClick={() => setManagementMode('phases')} className={`flex-1 py-3 text-xs font-bold ${managementMode === 'phases' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>Fases</button>
                 <button onClick={() => setManagementMode('flows')} className={`flex-1 py-3 text-xs font-bold ${managementMode === 'flows' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>Rutas</button>
+                <button onClick={() => setManagementMode('roles')} className={`flex-1 py-3 text-xs font-bold ${managementMode === 'roles' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>Roles</button>
               </div>
 
               <div className="flex-1 overflow-y-auto p-4">
@@ -1258,6 +1516,40 @@ export default function App() {
                     <button onClick={addFlow} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-400 font-bold text-sm hover:border-blue-400 hover:text-blue-600 flex justify-center gap-2 transition-colors"><Plus className="w-4 h-4"/> Nueva Ruta</button>
                   </div>
                 )}
+                {managementMode === 'roles' && (
+                  <div className="space-y-3">
+                    {roles.map((role) => {
+                      const draftValue = roleDrafts[role.id] ?? role.name;
+                      return (
+                        <div key={role.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-slate-200 flex-shrink-0 cursor-pointer relative shadow-inner">
+                            <input
+                              type="color"
+                              value={role.color}
+                              onChange={(e) => updateRoleColor(role.id, e.target.value)}
+                              className="absolute -top-2 -left-2 w-12 h-12 cursor-pointer"
+                              title="Cambiar color del rol"
+                            />
+                          </div>
+                          <input
+                            className="flex-1 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500"
+                            value={draftValue}
+                            onChange={(e) => setRoleDrafts(current => ({ ...current, [role.id]: e.target.value }))}
+                            onBlur={() => commitRoleRename(role, draftValue)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.currentTarget.blur();
+                              }
+                            }}
+                          />
+                          <button type="button" onClick={() => requestDeleteRole(role)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
+                        </div>
+                      );
+                    })}
+                    <button onClick={addRole} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-400 font-bold text-sm hover:border-blue-400 hover:text-blue-600 flex justify-center gap-2 transition-colors"><Plus className="w-4 h-4"/> Nuevo Rol</button>
+                  </div>
+                )}
                 {managementMode === 'activities' && (
                   <div className="space-y-4">
                      <div className="flex justify-between items-center mb-4">
@@ -1292,7 +1584,10 @@ export default function App() {
                               </div>
                             )}
 
-                            {phaseActivities.map((act, index) => (
+                            {phaseActivities.map((act, index) => {
+                              const primaryRoleName = getPrimaryRoleName(act);
+                              const supportRoleNames = getSupportRoleNames(act);
+                              return (
                               <React.Fragment key={act.id}>
                                 {(isDraggingNewActivity || draggedActivityId) && (
                                   <div
@@ -1306,14 +1601,14 @@ export default function App() {
                                   onDragStart={(event) => startActivityDrag(event, act.id)}
                                   onDragEnd={endActivityDrag}
                                   onClick={() => startEdit(act)}
-                                  className={`relative p-3 rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50/80' : 'bg-white'} ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
+                                  className={`relative p-3 rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${supportRoleNames.length > 0 ? 'bg-slate-50/80' : 'bg-white'} ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
                                 >
                                     <div className="pr-6">
                                         <p className="text-[10px] font-black text-slate-500 tracking-wider">{activityRefById[act.id] || `ID-${act.id}`} | #{displayOrderByActivityId[act.id] || 0}</p>
                                         <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
-                                        <p className="text-[10px] text-slate-500 truncate"><span className="font-semibold">Primary:</span> {getPrimaryRoleName(act) || 'No definido'}</p>
-                                        {getSupportRoleNames(act).length > 0 && (
-                                          <p className="text-[10px] text-slate-400 truncate"><span className="font-semibold">Support:</span> {getSupportRoleNames(act).join(', ')}</p>
+                                        <p className="text-[10px] text-slate-500 truncate"><span className="font-semibold">Primary:</span> {primaryRoleName || 'No definido'}</p>
+                                        {supportRoleNames.length > 0 && (
+                                          <p className="text-[10px] text-slate-400 truncate"><span className="font-semibold">Support:</span> {supportRoleNames.join(', ')}</p>
                                         )}
                                     </div>
                                     <div className="absolute bottom-2 right-2 flex items-center gap-1">
@@ -1345,7 +1640,8 @@ export default function App() {
                                     <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
                                 </div>
                               </React.Fragment>
-                            ))}
+                              );
+                            })}
 
                             {(isDraggingNewActivity || draggedActivityId) && (
                               <div
