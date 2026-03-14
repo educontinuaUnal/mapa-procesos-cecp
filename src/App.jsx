@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { 
   Layout, Plus, Trash2, Edit2, Save, X, Network, Clock, Filter, 
-  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch
+  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch, ChevronUp, ChevronDown
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -157,6 +157,8 @@ export default function App() {
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
   const [tempFilters, setTempFilters] = useState({ flow: 'all', role: 'all' });
   const [activeFilters, setActiveFilters] = useState({ flow: 'all', role: 'all' });
+  const [tempSearch, setTempSearch] = useState('');
+  const [activeSearch, setActiveSearch] = useState('');
   const [selectedActivityId, setSelectedActivityId] = useState(null);
   const [lines, setLines] = useState([]);
   
@@ -168,8 +170,87 @@ export default function App() {
   const [isEditingActivity, setIsEditingActivity] = useState(null);
   const [managementMode, setManagementMode] = useState('activities');
   const [formData, setFormData] = useState({
-    text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: ''
+    text: '', role: '', support_roles: [], duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: []
   });
+  const [insertBeforeId, setInsertBeforeId] = useState(null);
+  const [insertPhaseId, setInsertPhaseId] = useState(null);
+  const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
+  const [draggedActivityId, setDraggedActivityId] = useState(null);
+  const [dragDropTarget, setDragDropTarget] = useState('none');
+
+  const ORDER_GAP = 1024;
+  const phaseOrderMap = useMemo(
+    () => Object.fromEntries(phases.map((phase, index) => [phase.id, index])),
+    [phases]
+  );
+
+  const sortedActivities = useMemo(
+    () => [...activities].sort((a, b) => {
+      const phaseOrderA = phaseOrderMap[a.phaseId] ?? Number.MAX_SAFE_INTEGER;
+      const phaseOrderB = phaseOrderMap[b.phaseId] ?? Number.MAX_SAFE_INTEGER;
+      if (phaseOrderA !== phaseOrderB) return phaseOrderA - phaseOrderB;
+      const aOrder = a.order_index ?? (a.id * ORDER_GAP);
+      const bOrder = b.order_index ?? (b.id * ORDER_GAP);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return a.id - b.id;
+    }),
+    [activities, phaseOrderMap]
+  );
+
+  const getPhaseSortedActivities = (phaseId) => sortedActivities.filter(activity => activity.phaseId === phaseId);
+  const getActivityRoles = useCallback((activity) => {
+    if (Array.isArray(activity.activity_roles) && activity.activity_roles.length > 0) return activity.activity_roles;
+    if (activity.role) {
+      return [{ id: `legacy-${activity.id}`, activity_id: activity.id, role_name: activity.role, role_type: 'PRIMARY' }];
+    }
+    return [];
+  }, []);
+  const getPrimaryRoleName = useCallback((activity) => getActivityRoles(activity).find(role => role.role_type === 'PRIMARY')?.role_name || activity.role || '', [getActivityRoles]);
+  const getSupportRoleNames = useCallback((activity) => getActivityRoles(activity).filter(role => role.role_type === 'SUPPORT').map(role => role.role_name), [getActivityRoles]);
+  const normalizeActivityModel = useCallback((activity) => {
+    const roles = getActivityRoles(activity);
+    return {
+      ...activity,
+      role: getPrimaryRoleName(activity),
+      activity_roles: roles,
+    };
+  }, [getActivityRoles, getPrimaryRoleName]);
+
+  const getTargetKey = (targetId, phaseId) => (targetId === null ? `end:${phaseId}` : `before:${targetId}`);
+  const displayOrderByActivityId = useMemo(() => {
+    const result = {};
+    sortedActivities.forEach((activity, index) => {
+      result[activity.id] = index + 1;
+    });
+    return result;
+  }, [sortedActivities]);
+
+  const activityCodeById = useMemo(() => {
+    const result = {};
+    phases.forEach((phase, phaseIdx) => {
+      const phaseNumber = phaseIdx + 1;
+      sortedActivities.filter(activity => activity.phaseId === phase.id).forEach((activity, activityIdx) => {
+        const activityNumber = String(activityIdx + 1).padStart(2, '0');
+        result[activity.id] = `F${phaseNumber}-A${activityNumber}`;
+      });
+    });
+    return result;
+  }, [phases, sortedActivities]);
+
+  const matchesSearch = useCallback((activity) => {
+    if (activeTab !== 'diagram_list') return true;
+    if (!activeSearch.trim()) return true;
+    const query = activeSearch.trim().toLowerCase();
+    const roleNames = getActivityRoles(activity).map(role => role.role_name).join(' ').toLowerCase();
+    const haystack = [
+      activityCodeById[activity.id] || '',
+      activity.text || '',
+      activity.origin || '',
+      activity.condition || '',
+      roleNames,
+    ].join(' ').toLowerCase();
+    return haystack.includes(query);
+  }, [activeSearch, activityCodeById, getActivityRoles, activeTab]);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -227,11 +308,34 @@ export default function App() {
            const batch = writeBatch(db);
            stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
            stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
-           stageDefaultsData.activities.forEach(a => batch.set(doc(db, stageColPath('activities'), a.id.toString()), a));
+           stageDefaultsData.activities.forEach((a, index) => batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP }));
            await batch.commit();
-           data = stageDefaultsData.activities;
+           data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP }));
         }
 
+        const missingOrder = data.filter(activity => typeof activity.order_index !== 'number');
+        if (missingOrder.length > 0) {
+          const batch = writeBatch(db);
+          const phaseCatalog = data.length > 0
+            ? Array.from(new Set(data.map(activity => activity.phaseId))).map(id => ({ id }))
+            : stageDefaultsData.phases;
+
+          phaseCatalog.forEach(phase => {
+            const phaseActivities = data
+              .filter(activity => activity.phaseId === phase.id)
+              .sort((a, b) => a.id - b.id);
+            phaseActivities.forEach((activity, index) => {
+              if (typeof activity.order_index !== 'number') {
+                const order_index = (index + 1) * ORDER_GAP;
+                activity.order_index = order_index;
+                batch.set(doc(db, stageColPath('activities'), activity.id.toString()), { order_index }, { merge: true });
+              }
+            });
+          });
+          await batch.commit();
+        }
+
+        data = data.map(normalizeActivityModel);
         setActivities(data);
         setIsLoading(false);
       }, (error) => console.error(error));
@@ -241,82 +345,117 @@ export default function App() {
 
     const cleanup = setupDatabase();
     return () => cleanup;
-  }, [user, activeStage]);
+  }, [user, activeStage, normalizeActivityModel]);
 
 
-  // --- CALCULO DE LÍNEAS ROBUSTO ---
-  const calculateLines = () => {
-    if (activeTab !== 'diagram_node' || !containerRef.current || activities.length === 0) return;
+  const getDownstreamPath = useCallback((startId, allActs = activities) => {
+    let path = new Set([startId]);
+    let queue = [startId];
+    while(queue.length > 0) {
+      const current = queue.shift();
+      const children = allActs.filter(a => a.predecessors.includes(current));
+      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
+    }
+    return path;
+  }, [activities]);
 
-    const newLines = [];
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const scrollLeft = containerRef.current.scrollLeft;
-    const scrollTop = containerRef.current.scrollTop;
+  const getUpstreamPath = useCallback((startId, allActs = activities) => {
+    let path = new Set([startId]);
+    const findParents = (id) => {
+      const act = allActs.find(a => a.id === id);
+      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
+    };
+    findParents(startId);
+    return path;
+  }, [activities]);
 
-    activities.forEach(act => {
-      if (getOpacity(act) === 'hidden') return;
+  const getOpacity = useCallback((act) => {
+    const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
+    const matchesRole = activeFilters.role === 'all' || getActivityRoles(act).some(role => role.role_name === activeFilters.role);
+    const matchesSearchQuery = matchesSearch(act);
+    if (!matchesFlow || !matchesRole || !matchesSearchQuery) return 'hidden';
+    if (selectedActivityId) {
+      const downstream = getDownstreamPath(selectedActivityId);
+      const upstream = getUpstreamPath(selectedActivityId);
+      if (downstream.has(act.id) || upstream.has(act.id)) return 'opacity-100 scale-100';
+      return 'opacity-20 grayscale';
+    }
+    return 'opacity-100';
+  }, [activeFilters.flow, activeFilters.role, getActivityRoles, matchesSearch, getDownstreamPath, getUpstreamPath, selectedActivityId]);
 
-      if (act.predecessors && act.predecessors.length > 0) {
-        const endNode = nodeRefs.current[act.id];
-        
-        act.predecessors.forEach(predId => {
-          const startNode = nodeRefs.current[predId];
-          const predAct = activities.find(a => a.id === predId);
+  useLayoutEffect(() => {
+    const calculateLines = () => {
+      if (activeTab !== 'diagram_node' || !containerRef.current || activities.length === 0) return;
 
-          if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
-             const startRect = startNode.getBoundingClientRect();
-             const endRect = endNode.getBoundingClientRect();
+      const newLines = [];
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const scrollLeft = containerRef.current.scrollLeft;
+      const scrollTop = containerRef.current.scrollTop;
 
-             const startX = startRect.right - containerRect.left + scrollLeft;
-             const startY = startRect.top + (startRect.height / 2) - containerRect.top + scrollTop;
-             const endX = endRect.left - containerRect.left + scrollLeft;
-             const endY = endRect.top + (endRect.height / 2) - containerRect.top + scrollTop;
+      activities.forEach(act => {
+        if (getOpacity(act) === 'hidden') return;
 
-             let strokeColor = '#e2e8f0'; 
-             let strokeWidth = 2;
-             let zIndex = 0;
-             let isFlowActive = false;
-             
-             if (activeFilters.flow !== 'all') {
+        if (act.predecessors && act.predecessors.length > 0) {
+          const endNode = nodeRefs.current[act.id];
+
+          act.predecessors.forEach(predId => {
+            const startNode = nodeRefs.current[predId];
+            const predAct = activities.find(a => a.id === predId);
+
+            if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
+              const startRect = startNode.getBoundingClientRect();
+              const endRect = endNode.getBoundingClientRect();
+
+              const startX = startRect.right - containerRect.left + scrollLeft;
+              const startY = startRect.top + (startRect.height / 2) - containerRect.top + scrollTop;
+              const endX = endRect.left - containerRect.left + scrollLeft;
+              const endY = endRect.top + (endRect.height / 2) - containerRect.top + scrollTop;
+
+              let strokeColor = '#e2e8f0';
+              let strokeWidth = 2;
+              let zIndex = 0;
+              let isFlowActive = false;
+
+              if (activeFilters.flow !== 'all') {
                 if (act.flows.includes(activeFilters.flow) && predAct.flows.includes(activeFilters.flow)) {
-                    const flowObj = flows.find(f => f.id === activeFilters.flow);
-                    if (flowObj) strokeColor = flowObj.color;
-                    strokeWidth = 3;
-                    zIndex = 10;
-                    isFlowActive = true;
+                  const flowObj = flows.find(f => f.id === activeFilters.flow);
+                  if (flowObj) strokeColor = flowObj.color;
+                  strokeWidth = 3;
+                  zIndex = 10;
+                  isFlowActive = true;
                 }
-             } else if (selectedActivityId) {
+              } else if (selectedActivityId) {
                 const downstream = getDownstreamPath(selectedActivityId);
                 const upstream = getUpstreamPath(selectedActivityId);
                 const isRelated = (downstream.has(act.id) && downstream.has(predId)) || (upstream.has(act.id) && upstream.has(predId));
-                
+
                 if (isRelated) {
-                    strokeColor = '#64748b'; 
-                    strokeWidth = 3;
-                    zIndex = 10;
-                    isFlowActive = true;
+                  strokeColor = '#64748b';
+                  strokeWidth = 3;
+                  zIndex = 10;
+                  isFlowActive = true;
                 }
-             }
+              }
 
-             const dist = Math.abs(endX - startX);
-             const cpOffset = dist * 0.5; 
+              const dist = Math.abs(endX - startX);
+              const cpOffset = dist * 0.5;
 
-             newLines.push({
-               id: `${predId}-${act.id}`,
-               d: `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`,
-               color: strokeColor,
-               width: strokeWidth,
-               zIndex: zIndex,
-               animated: isFlowActive
-             });
-          }
-        });
-      }
-    });
-    setLines(newLines);
-  };
+              newLines.push({
+                id: `${predId}-${act.id}`,
+                d: `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`,
+                color: strokeColor,
+                width: strokeWidth,
+                zIndex,
+                animated: isFlowActive,
+              });
+            }
+          });
+        }
+      });
 
-  useLayoutEffect(() => {
+      setLines(newLines);
+    };
+
     calculateLines();
     const container = containerRef.current;
     if (container) container.addEventListener('scroll', calculateLines);
@@ -325,7 +464,7 @@ export default function App() {
         if (container) container.removeEventListener('scroll', calculateLines);
         window.removeEventListener('resize', calculateLines);
     };
-  }, [activities, activeFilters, activeTab, selectedActivityId, phases, flows]);
+  }, [activities, activeFilters, activeTab, flows, selectedActivityId, getDownstreamPath, getOpacity, getUpstreamPath]);
 
   // --- NAVEGACIÓN Y SEGURIDAD ---
   const handleEditorTabClick = () => {
@@ -349,47 +488,20 @@ export default function App() {
     setSelectedActivityId(null);
     setLines([]);
     setIsEditingActivity(null);
+    setInsertBeforeId(null);
+    setInsertPhaseId(null);
+    setIsDraggingNewActivity(false);
+    setDraggedActivityId(null);
+    setDragDropTarget('none');
     setTempFilters({ flow: 'all', role: 'all' });
     setActiveFilters({ flow: 'all', role: 'all' });
-    setFormData({ text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+    setTempSearch('');
+    setActiveSearch('');
+    setFormData({ text: '', role: '', support_roles: [], duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: [] });
   };
 
-  const applyFilters = () => { setActiveFilters(tempFilters); setSelectedActivityId(null); };
-  const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setSelectedActivityId(null); };
-
-  const getDownstreamPath = (startId, allActs = activities) => {
-    let path = new Set([startId]);
-    let queue = [startId];
-    while(queue.length > 0) {
-      const current = queue.shift();
-      const children = allActs.filter(a => a.predecessors.includes(current));
-      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
-    }
-    return path;
-  };
-
-  const getUpstreamPath = (startId, allActs = activities) => {
-    let path = new Set([startId]);
-    const findParents = (id) => {
-      const act = allActs.find(a => a.id === id);
-      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
-    };
-    findParents(startId);
-    return path;
-  };
-
-  const getOpacity = (act) => {
-    const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
-    const matchesRole = activeFilters.role === 'all' || act.role === activeFilters.role;
-    if (!matchesFlow || !matchesRole) return 'hidden';
-    if (selectedActivityId) {
-      const downstream = getDownstreamPath(selectedActivityId);
-      const upstream = getUpstreamPath(selectedActivityId);
-      if (downstream.has(act.id) || upstream.has(act.id)) return 'opacity-100 scale-100';
-      return 'opacity-20 grayscale';
-    }
-    return 'opacity-100';
-  };
+  const applyFilters = () => { setActiveFilters(tempFilters); setActiveSearch(tempSearch); setSelectedActivityId(null); };
+  const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setTempSearch(''); setActiveSearch(''); setSelectedActivityId(null); };
 
   // --- CRUD A FIREBASE (Guardado en Tiempo Real) ---
 
@@ -478,24 +590,204 @@ export default function App() {
   const updateFlowLabel = async (id, newLabel) => {
       await setDoc(doc(db, getStageColPath(activeStage, 'flows'), id), { label: newLabel }, { merge: true });
   };
+
+  const resetForm = () => {
+    setIsEditingActivity(null);
+    setInsertBeforeId(null);
+    setInsertPhaseId(null);
+    setDragDropTarget('none');
+    setIsDraggingNewActivity(false);
+    setDraggedActivityId(null);
+    setFormData({ text: '', role: '', support_roles: [], duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: [] });
+  };
+
+  const getOrderedActivitiesForPhase = (phaseId, excludeActivityId = null) => {
+    return getPhaseSortedActivities(phaseId).filter(activity => activity.id !== excludeActivityId);
+  };
+
+  const rebalancePhaseOrderIndexes = async (phaseId, excludeActivityId = null) => {
+    const phaseActivities = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const batch = writeBatch(db);
+    phaseActivities.forEach((activity, index) => {
+      const order_index = (index + 1) * ORDER_GAP;
+      if (activity.order_index !== order_index) {
+        batch.set(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()), { order_index }, { merge: true });
+      }
+    });
+    await batch.commit();
+  };
+
+  const calculateOrderIndex = async (phaseId, beforeActivityId = null, excludeActivityId = null) => {
+    const phaseActivities = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const targetIndex = beforeActivityId === null
+      ? phaseActivities.length
+      : phaseActivities.findIndex(activity => activity.id === beforeActivityId);
+
+    const insertionIndex = targetIndex === -1 ? phaseActivities.length : targetIndex;
+    const prev = phaseActivities[insertionIndex - 1] || null;
+    const next = phaseActivities[insertionIndex] || null;
+
+    const prevOrder = prev ? prev.order_index : null;
+    const nextOrder = next ? next.order_index : null;
+
+    if (prevOrder === null && nextOrder === null) return ORDER_GAP;
+    if (prevOrder !== null && nextOrder === null) return prevOrder + ORDER_GAP;
+    if (prevOrder === null && nextOrder !== null) return nextOrder - ORDER_GAP;
+
+    const midpoint = (prevOrder + nextOrder) / 2;
+    if ((nextOrder - prevOrder) > 0.0001) return midpoint;
+
+    await rebalancePhaseOrderIndexes(phaseId, excludeActivityId);
+    const rebalanced = getOrderedActivitiesForPhase(phaseId, excludeActivityId);
+    const idx = beforeActivityId === null
+      ? rebalanced.length
+      : rebalanced.findIndex(activity => activity.id === beforeActivityId);
+    const safeIndex = idx === -1 ? rebalanced.length : idx;
+    const prevRebalanced = rebalanced[safeIndex - 1] || null;
+    const nextRebalanced = rebalanced[safeIndex] || null;
+    if (!prevRebalanced && !nextRebalanced) return ORDER_GAP;
+    if (prevRebalanced && !nextRebalanced) return prevRebalanced.order_index + ORDER_GAP;
+    if (!prevRebalanced && nextRebalanced) return nextRebalanced.order_index - ORDER_GAP;
+    return (prevRebalanced.order_index + nextRebalanced.order_index) / 2;
+  };
+
+  const startNewActivityDrag = (event) => {
+    resetForm();
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('text/plain', 'new');
+    setIsDraggingNewActivity(true);
+  };
+
+  const endNewActivityDrag = () => {
+    setIsDraggingNewActivity(false);
+    setDragDropTarget('none');
+  };
+
+  const startActivityDrag = (event, activityId) => {
+    setDraggedActivityId(activityId);
+    setIsDraggingNewActivity(false);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `existing:${activityId}`);
+  };
+
+  const endActivityDrag = () => {
+    setDraggedActivityId(null);
+    setDragDropTarget('none');
+  };
+
+  const handleDragOverInsertion = (event, targetId, phaseId) => {
+    if (!isDraggingNewActivity && !draggedActivityId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = isDraggingNewActivity ? 'copy' : 'move';
+    setDragDropTarget(getTargetKey(targetId, phaseId));
+  };
+
+  const moveExistingActivity = async (activityId, targetBeforeId, targetPhaseId, keepSelection = true) => {
+    const movingActivity = activities.find(activity => activity.id === activityId);
+    if (!movingActivity) return;
+    if (targetBeforeId === activityId) return;
+
+    const nextOrderIndex = await calculateOrderIndex(targetPhaseId, targetBeforeId, activityId);
+    await setDoc(
+      doc(db, getStageColPath(activeStage, 'activities'), activityId.toString()),
+      { phaseId: targetPhaseId, order_index: nextOrderIndex },
+      { merge: true }
+    );
+
+    if (keepSelection) {
+      setIsEditingActivity(activityId);
+      setSelectedActivityId(activityId);
+    }
+  };
+
+  const moveActivityByStep = async (activityId, direction) => {
+    const activity = activities.find(item => item.id === activityId);
+    if (!activity) return;
+
+    const phaseActivities = getPhaseSortedActivities(activity.phaseId);
+    const currentIndex = phaseActivities.findIndex(item => item.id === activityId);
+    if (currentIndex === -1) return;
+
+    if (direction === 'up') {
+      if (currentIndex === 0) return;
+      const targetBeforeId = phaseActivities[currentIndex - 1].id;
+      await moveExistingActivity(activityId, targetBeforeId, activity.phaseId, true);
+      return;
+    }
+
+    if (currentIndex >= phaseActivities.length - 1) return;
+    const targetBeforeId = phaseActivities[currentIndex + 2]?.id ?? null;
+    await moveExistingActivity(activityId, targetBeforeId, activity.phaseId, true);
+  };
+
+  const handleDropInsertion = async (event, targetId, phaseId) => {
+    if (!isDraggingNewActivity && !draggedActivityId) return;
+    event.preventDefault();
+    setDragDropTarget(getTargetKey(targetId, phaseId));
+
+    if (draggedActivityId) {
+      await moveExistingActivity(draggedActivityId, targetId, phaseId, true);
+      setDraggedActivityId(null);
+      return;
+    }
+
+    setInsertBeforeId(targetId);
+    setInsertPhaseId(phaseId);
+    setIsDraggingNewActivity(false);
+    setFormData(current => ({ ...current, phaseId }));
+  };
   
   const handleSaveActivity = async () => {
     let preds = formData.predecessors;
     if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
-    
-    const newActivity = { ...formData, predecessors: preds };
-    const docId = isEditingActivity ? isEditingActivity.toString() : (Math.max(0, ...activities.map(a => a.id)) + 1).toString();
-    newActivity.id = parseInt(docId);
 
-    await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
-    
-    setIsEditingActivity(null);
-    setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+    const primaryRole = formData.role || '';
+    const supportRoles = (formData.support_roles || []).filter(role => role && role !== primaryRole);
+    const activity_roles = [
+      ...(primaryRole ? [{ id: `ar-primary-${Date.now()}`, role_name: primaryRole, role_type: 'PRIMARY' }] : []),
+      ...supportRoles.map((roleName, idx) => ({ id: `ar-support-${Date.now()}-${idx}`, role_name: roleName, role_type: 'SUPPORT' })),
+    ];
+
+    const newActivity = {
+      ...formData,
+      role: primaryRole,
+      activity_roles,
+      predecessors: preds,
+    };
+
+    if (isEditingActivity) {
+      const docId = isEditingActivity.toString();
+      const currentActivity = activities.find(activity => activity.id === isEditingActivity);
+      newActivity.id = parseInt(docId);
+      if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
+        newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
+      } else {
+        newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
+      }
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
+    } else {
+      const phaseId = insertPhaseId || newActivity.phaseId;
+      const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
+      const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
+      const docId = nextId.toString();
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
+        ...newActivity,
+        id: nextId,
+        phaseId,
+        order_index,
+      });
+    }
+
+    resetForm();
   };
 
   const startEdit = (activity) => {
     setIsEditingActivity(activity.id);
-    setFormData({ ...activity, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
+    setInsertBeforeId(null);
+    setInsertPhaseId(null);
+    const primaryRole = getPrimaryRoleName(activity);
+    const supportRoles = getSupportRoleNames(activity);
+    setFormData({ ...activity, role: primaryRole, support_roles: supportRoles, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
     setActiveTab('editor');
   };
 
@@ -518,34 +810,45 @@ export default function App() {
     const phaseObj = phases.find(p => p.id === activity.phaseId);
     const phaseColor = getPhaseHexColor(phaseObj);
     const isDecision = activity.type === 'decision';
+    const displayNumber = displayOrderByActivityId[activity.id] || 0;
+    const activityCode = activityCodeById[activity.id] || `ID-${activity.id}`;
+    const isSupport = getSupportRoleNames(activity).length > 0;
+    const primaryRole = getPrimaryRoleName(activity) || 'Sin rol';
+    const supportRoles = getSupportRoleNames(activity);
     
     const shapeClasses = isDecision 
         ? 'w-10 h-10 rotate-45 border-2 rounded-sm text-white' 
         : `w-10 h-10 rounded-full border-2 border-white shadow-md text-white`;
         
     const customStyle = isDecision 
-        ? { backgroundColor: '#9ca3af', borderColor: '#6b7280' } 
-        : { backgroundColor: phaseColor };
+        ? { backgroundColor: isSupport ? '#9ca3af99' : '#9ca3af', borderColor: '#6b7280' } 
+        : { backgroundColor: isSupport ? `${phaseColor}99` : phaseColor };
         
     const contentRotate = isDecision ? '-rotate-45' : '';
 
     return (
-      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20 }}>
+      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20, filter: isSupport ? 'saturate(0.7)' : 'none' }}>
         <div 
             onClick={(e) => { e.stopPropagation(); setSelectedActivityId(isSelected ? null : activity.id); }}
             className={`flex items-center justify-center font-bold text-xs cursor-pointer transition-transform duration-200 hover:scale-110 active:scale-95 shadow-sm ${shapeClasses} ${isSelected ? 'ring-4 ring-offset-2 ring-blue-300' : ''}`}
             style={customStyle}
         >
-            <span className={`${contentRotate}`}>{activity.id}</span>
+            <span className={`${contentRotate}`}>{displayNumber}</span>
         </div>
+        <span className={`absolute top-full mt-1 text-[9px] font-black tracking-wide ${isSupport ? 'text-slate-400' : 'text-slate-500'}`}>{activityCode}</span>
         <div className={`absolute left-16 top-1/2 -translate-y-1/2 w-72 bg-white rounded-xl shadow-2xl border border-slate-100 transition-all duration-300 pointer-events-none origin-left z-[101] ${isSelected ? 'opacity-100 scale-100 translate-x-0' : 'opacity-0 scale-95 -translate-x-4 pointer-events-none'}`}>
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
             <div className="flex justify-between items-center p-3 border-b border-slate-50 bg-slate-50/50 rounded-t-xl">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isDecision ? 'Decisión' : 'Actividad'} #{activity.id}</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${roleBadges[activity.role] || 'bg-slate-100'}`}>{activity.role}</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{activityCode} · #{displayNumber}</span>
+                <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase ring-1 ring-inset ring-white/60 ${roleBadges[primaryRole] || 'bg-slate-100'}`}>{primaryRole}</span>
             </div>
             <div className="p-4">
                 <p className="text-sm font-medium text-slate-800 leading-snug mb-3">{activity.text}</p>
+                {supportRoles.length > 0 && (
+                  <div className="mb-3 text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-md px-2 py-1">
+                    <span className="font-semibold text-slate-600">Support:</span> <span className="text-slate-400">{supportRoles.join(', ')}</span>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2 mb-3">
                     {activity.condition && (<div className="bg-amber-50 text-amber-700 text-[10px] px-2 py-1 rounded-md border border-amber-100 flex items-center gap-1 font-medium"><CornerDownRight className="w-3 h-3"/> {activity.condition}</div>)}
                     <div className="flex items-center gap-1 text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-md"><Clock className="w-3 h-3"/> {activity.duration}</div>
@@ -655,26 +958,36 @@ export default function App() {
 
             {/* FILTROS */}
             {activeTab !== 'editor' && (
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-inner">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2 pb-2">Filtros de visualización</p>
-                <div className="flex flex-wrap items-center gap-2 px-1">
-                  <div className="flex items-center gap-2 px-2 border-r border-slate-300">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 shadow-inner">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-1 pb-1.5">Filtros de visualización</p>
+                <div className="flex flex-wrap items-center gap-1.5 px-1">
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-slate-200">
                     <Filter className="w-4 h-4 text-blue-600" />
-                    <select value={tempFilters.flow} onChange={(e) => setTempFilters({...tempFilters, flow: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-36 sm:w-44 truncate hover:text-blue-600 transition-colors">
+                    <select value={tempFilters.flow} onChange={(e) => setTempFilters({...tempFilters, flow: e.target.value})} className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer py-0.5 pl-0 pr-6 w-32 sm:w-40 truncate hover:text-blue-600 transition-colors">
                       <option value="all">Todas las Rutas</option>
                       {flows.map(f => <option key={f.id} value={f.id}>{f.label.replace('Ruta: ', '')}</option>)}
                     </select>
                   </div>
-                  <div className="flex items-center gap-2 px-2 border-r border-slate-300">
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-slate-200">
                     <Users className="w-4 h-4 text-purple-600" />
-                    <select value={tempFilters.role} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-32 sm:w-36 truncate hover:text-purple-600 transition-colors">
+                    <select value={tempFilters.role} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer py-0.5 pl-0 pr-6 w-28 sm:w-34 truncate hover:text-purple-600 transition-colors">
                       <option value="all">Todos los Roles</option>
                       {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </div>
-                  <div className="flex gap-1 ml-auto sm:ml-0">
-                    <button onClick={applyFilters} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-900 shadow-sm transition-transform active:scale-95">Filtrar</button>
-                    <button onClick={clearFilters} className="bg-white text-slate-500 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-bold hover:text-red-600 hover:border-red-200 shadow-sm transition-transform active:scale-95"><RotateCcw className="w-3 h-3" /></button>
+                  {activeTab === 'diagram_list' && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-slate-200 grow sm:grow-0">
+                      <input
+                        value={tempSearch}
+                        onChange={(e) => setTempSearch(e.target.value)}
+                        placeholder="Search by activity name, code, or role..."
+                        className="bg-transparent border-none px-1 py-0.5 text-xs w-full sm:w-60 focus:outline-none focus:ring-0"
+                      />
+                    </div>
+                  )}
+                  <div className="flex gap-1 ml-auto">
+                    <button onClick={applyFilters} className="bg-slate-900 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold hover:bg-black shadow-sm transition-transform active:scale-95">Filtrar</button>
+                    <button onClick={clearFilters} className="bg-white text-slate-500 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-semibold hover:text-red-600 hover:border-red-200 shadow-sm transition-transform active:scale-95"><RotateCcw className="w-3 h-3" /></button>
                   </div>
                 </div>
               </div>
@@ -714,7 +1027,7 @@ export default function App() {
                           <div className="w-px h-full bg-slate-200 absolute top-full mt-0 -z-10"></div>
                       </div>
                       <div className="flex-1 w-full flex flex-col items-center pb-20 pt-4 space-y-4">
-                          {activities.filter(a => a.phaseId === phase.id).map(act => (
+                          {getPhaseSortedActivities(phase.id).map(act => (
                               <NodeCard key={act.id} activity={act} />
                           ))}
                       </div>
@@ -734,7 +1047,7 @@ export default function App() {
              <div className="flex-1 h-full overflow-y-auto bg-slate-50/50 p-6 md:p-10 scroll-smooth relative" onClick={() => setSelectedActivityId(null)}>
                 <div className="max-w-6xl mx-auto space-y-12 pb-24">
                     {phases.map((phase, index) => {
-                        const phaseActivities = activities.filter(a => a.phaseId === phase.id);
+                        const phaseActivities = getPhaseSortedActivities(phase.id);
                         if(phaseActivities.length === 0) return null;
                         
                         const phaseColor = getPhaseHexColor(phase);
@@ -756,16 +1069,17 @@ export default function App() {
                                         if (getOpacity(act) === 'hidden') return null;
                                         
                                         return (
-                                            <div key={act.id} className="group relative bg-white rounded-xl shadow-sm border border-slate-200 p-5 hover:shadow-md hover:border-slate-300 transition-all flex flex-col h-full overflow-hidden">
+                                            <div key={act.id} className={`group relative rounded-xl shadow-sm border p-5 hover:shadow-md transition-all flex flex-col h-full overflow-hidden ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50 border-slate-200 hover:border-slate-300' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
                                                 {/* Línea indicadora de herencia de color */}
                                                 <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: phaseColor }}></div>
                                                 
                                                 {/* Header de la Tarjeta */}
                                                 <div className="flex justify-between items-start mb-3 pl-2">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">ID: {act.id}</span>
-                                                        <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[act.role] || 'bg-slate-100 text-slate-600'}`}>
-                                                            {act.role}
+                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`}</span>
+                                                        <span className="text-[10px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-md tracking-wider">#{displayOrderByActivityId[act.id] || 0}</span>
+                                                        <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
+                                                            {getPrimaryRoleName(act) || 'Sin rol'}
                                                         </span>
                                                     </div>
                                                     {act.duration && act.duration !== 'N/A' && (
@@ -782,6 +1096,16 @@ export default function App() {
 
                                                 {/* Meta información compacta en el fondo de la tarjeta */}
                                                 <div className="flex flex-col gap-2 pl-2 mt-auto">
+                                                    <div className="flex flex-wrap gap-1">
+                                                      <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
+                                                        Primary: {getPrimaryRoleName(act) || 'No definido'}
+                                                      </span>
+                                                      {getSupportRoleNames(act).map(role => (
+                                                        <span key={`${act.id}-${role}`} className="text-[10px] px-2 py-1 rounded-md font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                                                          Support: {role}
+                                                        </span>
+                                                      ))}
+                                                    </div>
                                                     {/* Condicional */}
                                                     {act.condition && (
                                                         <div className="flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 px-2.5 py-1.5 rounded-md border border-amber-100 font-medium w-full">
@@ -866,20 +1190,106 @@ export default function App() {
                   </div>
                 )}
                 {managementMode === 'activities' && (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                      <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-xs text-slate-400 uppercase tracking-wider">Inventario</h3>
-                        <button onClick={() => { setIsEditingActivity(null); setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' }); }} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md font-bold hover:bg-blue-700 shadow-sm transition-all">+ Nueva</button>
+                        <button
+                          draggable
+                          onDragStart={startNewActivityDrag}
+                          onDragEnd={endNewActivityDrag}
+                          onClick={resetForm}
+                          className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md font-bold hover:bg-blue-700 shadow-sm transition-all cursor-grab active:cursor-grabbing"
+                          title="Arrastra para insertar por posición o haz click para agregar al final"
+                        >
+                          + Nueva
+                        </button>
                      </div>
-                     {activities.map(act => (
-                        <div key={act.id} onClick={() => startEdit(act)} className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''}`}>
-                            <div className="pr-6">
-                                <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
-                                <span className="text-[10px] text-slate-400">ID: {act.id}</span>
+                     {phases.map((phase) => {
+                        const phaseActivities = getPhaseSortedActivities(phase.id);
+                        const phaseColor = getPhaseHexColor(phase);
+                        return (
+                          <div key={phase.id} className="rounded-lg border border-slate-200 bg-slate-50/60 p-2">
+                            <div className="px-2 py-1.5 text-[10px] font-black uppercase tracking-wider" style={{ color: phaseColor }}>
+                              {phase.title}
                             </div>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
-                        </div>
-                     ))}
+
+                            {(isDraggingNewActivity || draggedActivityId) && phaseActivities.length > 0 && (
+                              <div
+                                onDragOver={(event) => handleDragOverInsertion(event, phaseActivities[0].id, phase.id)}
+                                onDrop={(event) => handleDropInsertion(event, phaseActivities[0].id, phase.id)}
+                                className={`mb-1 h-8 rounded-md border-2 border-dashed text-[11px] font-bold transition-all flex items-center justify-center ${dragDropTarget === getTargetKey(phaseActivities[0].id, phase.id) ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-200 text-slate-400 bg-white'}`}
+                              >
+                                Insertar al inicio de {phase.title}
+                              </div>
+                            )}
+
+                            {phaseActivities.map((act, index) => (
+                              <React.Fragment key={act.id}>
+                                {(isDraggingNewActivity || draggedActivityId) && (
+                                  <div
+                                    onDragOver={(event) => handleDragOverInsertion(event, act.id, phase.id)}
+                                    onDrop={(event) => handleDropInsertion(event, act.id, phase.id)}
+                                    className={`h-3 rounded transition-all ${dragDropTarget === getTargetKey(act.id, phase.id) ? 'bg-emerald-200' : 'bg-transparent'}`}
+                                  />
+                                )}
+                                <div
+                                  draggable
+                                  onDragStart={(event) => startActivityDrag(event, act.id)}
+                                  onDragEnd={endActivityDrag}
+                                  onClick={() => startEdit(act)}
+                                  className={`relative p-3 rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50/80' : 'bg-white'} ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
+                                >
+                                    <div className="pr-6">
+                                        <p className="text-[10px] font-black text-slate-500 tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`} | #{displayOrderByActivityId[act.id] || 0}</p>
+                                        <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
+                                        <p className="text-[10px] text-slate-500 truncate"><span className="font-semibold">Primary:</span> {getPrimaryRoleName(act) || 'No definido'}</p>
+                                        {getSupportRoleNames(act).length > 0 && (
+                                          <p className="text-[10px] text-slate-400 truncate"><span className="font-semibold">Support:</span> {getSupportRoleNames(act).join(', ')}</p>
+                                        )}
+                                    </div>
+                                    <div className="absolute bottom-2 right-2 flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={index === 0}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          moveActivityByStep(act.id, 'up');
+                                        }}
+                                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        title="Mover arriba"
+                                      >
+                                        <ChevronUp className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={index === phaseActivities.length - 1}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          moveActivityByStep(act.id, 'down');
+                                        }}
+                                        className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        title="Mover abajo"
+                                      >
+                                        <ChevronDown className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    <button type="button" onClick={(e) => { e.stopPropagation(); requestDeleteActivity(act.id); }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-3 h-3"/></button>
+                                </div>
+                              </React.Fragment>
+                            ))}
+
+                            {(isDraggingNewActivity || draggedActivityId) && (
+                              <div
+                                onDragOver={(event) => handleDragOverInsertion(event, null, phase.id)}
+                                onDrop={(event) => handleDropInsertion(event, null, phase.id)}
+                                className={`mt-1 p-2 border-2 border-dashed rounded-lg text-[11px] font-bold transition-all ${dragDropTarget === getTargetKey(null, phase.id) ? 'border-emerald-400 text-emerald-700 bg-emerald-50' : 'border-slate-300 text-slate-500 bg-white'}`}
+                              >
+                                Soltar al final de {phase.title}
+                              </div>
+                            )}
+                          </div>
+                        );
+                     })}
                   </div>
                 )}
               </div>
@@ -891,6 +1301,11 @@ export default function App() {
                  {isEditingActivity ? <Edit2 className="w-5 h-5 text-blue-600"/> : <Plus className="w-5 h-5 text-emerald-600"/>}
                  {isEditingActivity ? `Editar Actividad #${isEditingActivity}` : 'Crear Nueva Actividad'}
                </h2>
+               {!isEditingActivity && insertBeforeId && (
+                  <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} antes de {activityCodeById[insertBeforeId] || `ID-${insertBeforeId}`}.
+                  </div>
+               )}
                <div className="grid grid-cols-1 gap-5 max-w-2xl">
                   <div>
                       <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Fase del Proceso</label>
@@ -911,6 +1326,25 @@ export default function App() {
                          </select>
                      </div>
                      <div>
+                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Roles de Soporte</label>
+                         <div className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-slate-50 max-h-24 overflow-y-auto space-y-1">
+                           {availableRoles.filter(role => role !== formData.role).map(role => (
+                             <label key={role} className="flex items-center gap-2 text-slate-600">
+                               <input
+                                 type="checkbox"
+                                 checked={(formData.support_roles || []).includes(role)}
+                                 onChange={(event) => {
+                                   const current = formData.support_roles || [];
+                                   const support_roles = event.target.checked ? [...current, role] : current.filter(item => item !== role);
+                                   setFormData({ ...formData, support_roles });
+                                 }}
+                               />
+                               {role}
+                             </label>
+                           ))}
+                         </div>
+                      </div>
+                     <div>
                          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Duración</label>
                          <input
                             className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -920,8 +1354,30 @@ export default function App() {
                          />
                      </div>
                      <div>
-                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Predecesores (IDs)</label>
-                         <input className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none" placeholder="Ej: 1, 3" value={Array.isArray(formData.predecessors) ? formData.predecessors.join(',') : formData.predecessors} onChange={e=>setFormData({...formData, predecessors: e.target.value})} />
+                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Predecesores</label>
+                         <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg bg-slate-50 p-2 space-y-1">
+                            {sortedActivities
+                              .filter(activity => activity.id !== isEditingActivity)
+                              .map(activity => {
+                                const selected = (Array.isArray(formData.predecessors) ? formData.predecessors : []).includes(activity.id);
+                                return (
+                                  <label key={activity.id} className={`flex items-center gap-2 text-xs p-1.5 rounded-md cursor-pointer ${selected ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-600 hover:bg-white'}`}>
+                                    <input
+                                      type="checkbox"
+                                      checked={selected}
+                                      onChange={(event) => {
+                                        const current = Array.isArray(formData.predecessors) ? formData.predecessors : [];
+                                        const predecessors = event.target.checked
+                                          ? [...current, activity.id]
+                                          : current.filter(id => id !== activity.id);
+                                        setFormData({ ...formData, predecessors });
+                                      }}
+                                    />
+                                    <span>{activityCodeById[activity.id] || `ID-${activity.id}`}</span>
+                                  </label>
+                                );
+                              })}
+                         </div>
                      </div>
                   </div>
                   <div>
@@ -949,7 +1405,7 @@ export default function App() {
                   </div>
                   <div className="flex gap-3 mt-4">
                       <button onClick={handleSaveActivity} className="flex-1 bg-slate-900 text-white py-2.5 rounded-lg font-bold shadow-lg hover:bg-black transition-all transform active:scale-95 flex justify-center items-center gap-2"><Save className="w-4 h-4"/> Guardar Cambios</button>
-                      {isEditingActivity && (<button onClick={() => { setIsEditingActivity(null); setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' }); }} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
+                      {(isEditingActivity || insertBeforeId) && (<button onClick={resetForm} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
                   </div>
                </div>
             </div>
