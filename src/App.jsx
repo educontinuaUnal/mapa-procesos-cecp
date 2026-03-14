@@ -157,6 +157,8 @@ export default function App() {
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
   const [tempFilters, setTempFilters] = useState({ flow: 'all', role: 'all' });
   const [activeFilters, setActiveFilters] = useState({ flow: 'all', role: 'all' });
+  const [tempSearch, setTempSearch] = useState('');
+  const [activeSearch, setActiveSearch] = useState('');
   const [selectedActivityId, setSelectedActivityId] = useState(null);
   const [lines, setLines] = useState([]);
   
@@ -168,7 +170,7 @@ export default function App() {
   const [isEditingActivity, setIsEditingActivity] = useState(null);
   const [managementMode, setManagementMode] = useState('activities');
   const [formData, setFormData] = useState({
-    text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: ''
+    text: '', role: '', support_roles: [], duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: []
   });
   const [insertBeforeId, setInsertBeforeId] = useState(null);
   const [insertPhaseId, setInsertPhaseId] = useState(null);
@@ -196,6 +198,24 @@ export default function App() {
   );
 
   const getPhaseSortedActivities = (phaseId) => sortedActivities.filter(activity => activity.phaseId === phaseId);
+  const getActivityRoles = useCallback((activity) => {
+    if (Array.isArray(activity.activity_roles) && activity.activity_roles.length > 0) return activity.activity_roles;
+    if (activity.role) {
+      return [{ id: `legacy-${activity.id}`, activity_id: activity.id, role_name: activity.role, role_type: 'PRIMARY' }];
+    }
+    return [];
+  }, []);
+  const getPrimaryRoleName = useCallback((activity) => getActivityRoles(activity).find(role => role.role_type === 'PRIMARY')?.role_name || activity.role || '', [getActivityRoles]);
+  const getSupportRoleNames = useCallback((activity) => getActivityRoles(activity).filter(role => role.role_type === 'SUPPORT').map(role => role.role_name), [getActivityRoles]);
+  const normalizeActivityModel = useCallback((activity) => {
+    const roles = getActivityRoles(activity);
+    return {
+      ...activity,
+      role: getPrimaryRoleName(activity),
+      activity_roles: roles,
+    };
+  }, [getActivityRoles, getPrimaryRoleName]);
+
   const getTargetKey = (targetId, phaseId) => (targetId === null ? `end:${phaseId}` : `before:${targetId}`);
   const displayOrderByActivityId = useMemo(() => {
     const result = {};
@@ -204,6 +224,33 @@ export default function App() {
     });
     return result;
   }, [sortedActivities]);
+
+  const activityCodeById = useMemo(() => {
+    const result = {};
+    phases.forEach((phase, phaseIdx) => {
+      const phaseNumber = phaseIdx + 1;
+      sortedActivities.filter(activity => activity.phaseId === phase.id).forEach((activity, activityIdx) => {
+        const activityNumber = String(activityIdx + 1).padStart(2, '0');
+        result[activity.id] = `F${phaseNumber}-A${activityNumber}`;
+      });
+    });
+    return result;
+  }, [phases, sortedActivities]);
+
+  const matchesSearch = useCallback((activity) => {
+    if (activeTab !== 'diagram_list') return true;
+    if (!activeSearch.trim()) return true;
+    const query = activeSearch.trim().toLowerCase();
+    const roleNames = getActivityRoles(activity).map(role => role.role_name).join(' ').toLowerCase();
+    const haystack = [
+      activityCodeById[activity.id] || '',
+      activity.text || '',
+      activity.origin || '',
+      activity.condition || '',
+      roleNames,
+    ].join(' ').toLowerCase();
+    return haystack.includes(query);
+  }, [activeSearch, activityCodeById, getActivityRoles, activeTab]);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -288,6 +335,7 @@ export default function App() {
           await batch.commit();
         }
 
+        data = data.map(normalizeActivityModel);
         setActivities(data);
         setIsLoading(false);
       }, (error) => console.error(error));
@@ -297,7 +345,7 @@ export default function App() {
 
     const cleanup = setupDatabase();
     return () => cleanup;
-  }, [user, activeStage]);
+  }, [user, activeStage, normalizeActivityModel]);
 
 
   const getDownstreamPath = useCallback((startId, allActs = activities) => {
@@ -323,8 +371,9 @@ export default function App() {
 
   const getOpacity = useCallback((act) => {
     const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
-    const matchesRole = activeFilters.role === 'all' || act.role === activeFilters.role;
-    if (!matchesFlow || !matchesRole) return 'hidden';
+    const matchesRole = activeFilters.role === 'all' || getActivityRoles(act).some(role => role.role_name === activeFilters.role);
+    const matchesSearchQuery = matchesSearch(act);
+    if (!matchesFlow || !matchesRole || !matchesSearchQuery) return 'hidden';
     if (selectedActivityId) {
       const downstream = getDownstreamPath(selectedActivityId);
       const upstream = getUpstreamPath(selectedActivityId);
@@ -332,7 +381,7 @@ export default function App() {
       return 'opacity-20 grayscale';
     }
     return 'opacity-100';
-  }, [activeFilters.flow, activeFilters.role, getDownstreamPath, getUpstreamPath, selectedActivityId]);
+  }, [activeFilters.flow, activeFilters.role, getActivityRoles, matchesSearch, getDownstreamPath, getUpstreamPath, selectedActivityId]);
 
   useLayoutEffect(() => {
     const calculateLines = () => {
@@ -446,11 +495,13 @@ export default function App() {
     setDragDropTarget('none');
     setTempFilters({ flow: 'all', role: 'all' });
     setActiveFilters({ flow: 'all', role: 'all' });
-    setFormData({ text: '', role: '', duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+    setTempSearch('');
+    setActiveSearch('');
+    setFormData({ text: '', role: '', support_roles: [], duration: '', phaseId: '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: [] });
   };
 
-  const applyFilters = () => { setActiveFilters(tempFilters); setSelectedActivityId(null); };
-  const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setSelectedActivityId(null); };
+  const applyFilters = () => { setActiveFilters(tempFilters); setActiveSearch(tempSearch); setSelectedActivityId(null); };
+  const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setTempSearch(''); setActiveSearch(''); setSelectedActivityId(null); };
 
   // --- CRUD A FIREBASE (Guardado en Tiempo Real) ---
 
@@ -547,7 +598,7 @@ export default function App() {
     setDragDropTarget('none');
     setIsDraggingNewActivity(false);
     setDraggedActivityId(null);
-    setFormData({ text: '', role: '', duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '' });
+    setFormData({ text: '', role: '', support_roles: [], duration: '', phaseId: phases[0]?.id || '', type: 'process', predecessors: [], flows: ['all'], origin: '', condition: '', activity_roles: [] });
   };
 
   const getOrderedActivitiesForPhase = (phaseId, excludeActivityId = null) => {
@@ -689,8 +740,20 @@ export default function App() {
   const handleSaveActivity = async () => {
     let preds = formData.predecessors;
     if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
-    
-    const newActivity = { ...formData, predecessors: preds };
+
+    const primaryRole = formData.role || '';
+    const supportRoles = (formData.support_roles || []).filter(role => role && role !== primaryRole);
+    const activity_roles = [
+      ...(primaryRole ? [{ id: `ar-primary-${Date.now()}`, role_name: primaryRole, role_type: 'PRIMARY' }] : []),
+      ...supportRoles.map((roleName, idx) => ({ id: `ar-support-${Date.now()}-${idx}`, role_name: roleName, role_type: 'SUPPORT' })),
+    ];
+
+    const newActivity = {
+      ...formData,
+      role: primaryRole,
+      activity_roles,
+      predecessors: preds,
+    };
 
     if (isEditingActivity) {
       const docId = isEditingActivity.toString();
@@ -722,7 +785,9 @@ export default function App() {
     setIsEditingActivity(activity.id);
     setInsertBeforeId(null);
     setInsertPhaseId(null);
-    setFormData({ ...activity, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
+    const primaryRole = getPrimaryRoleName(activity);
+    const supportRoles = getSupportRoleNames(activity);
+    setFormData({ ...activity, role: primaryRole, support_roles: supportRoles, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
     setActiveTab('editor');
   };
 
@@ -746,19 +811,23 @@ export default function App() {
     const phaseColor = getPhaseHexColor(phaseObj);
     const isDecision = activity.type === 'decision';
     const displayNumber = displayOrderByActivityId[activity.id] || 0;
+    const activityCode = activityCodeById[activity.id] || `ID-${activity.id}`;
+    const isSupport = getSupportRoleNames(activity).length > 0;
+    const primaryRole = getPrimaryRoleName(activity) || 'Sin rol';
+    const supportRoles = getSupportRoleNames(activity);
     
     const shapeClasses = isDecision 
         ? 'w-10 h-10 rotate-45 border-2 rounded-sm text-white' 
         : `w-10 h-10 rounded-full border-2 border-white shadow-md text-white`;
         
     const customStyle = isDecision 
-        ? { backgroundColor: '#9ca3af', borderColor: '#6b7280' } 
-        : { backgroundColor: phaseColor };
+        ? { backgroundColor: isSupport ? '#9ca3af99' : '#9ca3af', borderColor: '#6b7280' } 
+        : { backgroundColor: isSupport ? `${phaseColor}99` : phaseColor };
         
     const contentRotate = isDecision ? '-rotate-45' : '';
 
     return (
-      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20 }}>
+      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20, filter: isSupport ? 'saturate(0.7)' : 'none' }}>
         <div 
             onClick={(e) => { e.stopPropagation(); setSelectedActivityId(isSelected ? null : activity.id); }}
             className={`flex items-center justify-center font-bold text-xs cursor-pointer transition-transform duration-200 hover:scale-110 active:scale-95 shadow-sm ${shapeClasses} ${isSelected ? 'ring-4 ring-offset-2 ring-blue-300' : ''}`}
@@ -766,14 +835,20 @@ export default function App() {
         >
             <span className={`${contentRotate}`}>{displayNumber}</span>
         </div>
+        <span className={`absolute top-full mt-1 text-[9px] font-black tracking-wide ${isSupport ? 'text-slate-400' : 'text-slate-500'}`}>{activityCode}</span>
         <div className={`absolute left-16 top-1/2 -translate-y-1/2 w-72 bg-white rounded-xl shadow-2xl border border-slate-100 transition-all duration-300 pointer-events-none origin-left z-[101] ${isSelected ? 'opacity-100 scale-100 translate-x-0' : 'opacity-0 scale-95 -translate-x-4 pointer-events-none'}`}>
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
             <div className="flex justify-between items-center p-3 border-b border-slate-50 bg-slate-50/50 rounded-t-xl">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{isDecision ? 'Decisión' : 'Actividad'} #{displayNumber}</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${roleBadges[activity.role] || 'bg-slate-100'}`}>{activity.role}</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{activityCode} · #{displayNumber}</span>
+                <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase ring-1 ring-inset ring-white/60 ${roleBadges[primaryRole] || 'bg-slate-100'}`}>{primaryRole}</span>
             </div>
             <div className="p-4">
                 <p className="text-sm font-medium text-slate-800 leading-snug mb-3">{activity.text}</p>
+                {supportRoles.length > 0 && (
+                  <div className="mb-3 text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-md px-2 py-1">
+                    <span className="font-semibold text-slate-600">Support:</span> <span className="text-slate-400">{supportRoles.join(', ')}</span>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2 mb-3">
                     {activity.condition && (<div className="bg-amber-50 text-amber-700 text-[10px] px-2 py-1 rounded-md border border-amber-100 flex items-center gap-1 font-medium"><CornerDownRight className="w-3 h-3"/> {activity.condition}</div>)}
                     <div className="flex items-center gap-1 text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-md"><Clock className="w-3 h-3"/> {activity.duration}</div>
@@ -883,26 +958,36 @@ export default function App() {
 
             {/* FILTROS */}
             {activeTab !== 'editor' && (
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-inner">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2 pb-2">Filtros de visualización</p>
-                <div className="flex flex-wrap items-center gap-2 px-1">
-                  <div className="flex items-center gap-2 px-2 border-r border-slate-300">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 shadow-inner">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-1 pb-1.5">Filtros de visualización</p>
+                <div className="flex flex-wrap items-center gap-1.5 px-1">
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-slate-200">
                     <Filter className="w-4 h-4 text-blue-600" />
-                    <select value={tempFilters.flow} onChange={(e) => setTempFilters({...tempFilters, flow: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-36 sm:w-44 truncate hover:text-blue-600 transition-colors">
+                    <select value={tempFilters.flow} onChange={(e) => setTempFilters({...tempFilters, flow: e.target.value})} className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer py-0.5 pl-0 pr-6 w-32 sm:w-40 truncate hover:text-blue-600 transition-colors">
                       <option value="all">Todas las Rutas</option>
                       {flows.map(f => <option key={f.id} value={f.id}>{f.label.replace('Ruta: ', '')}</option>)}
                     </select>
                   </div>
-                  <div className="flex items-center gap-2 px-2 border-r border-slate-300">
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-slate-200">
                     <Users className="w-4 h-4 text-purple-600" />
-                    <select value={tempFilters.role} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-bold text-slate-700 focus:ring-0 cursor-pointer py-1 pl-0 pr-6 w-32 sm:w-36 truncate hover:text-purple-600 transition-colors">
+                    <select value={tempFilters.role} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer py-0.5 pl-0 pr-6 w-28 sm:w-34 truncate hover:text-purple-600 transition-colors">
                       <option value="all">Todos los Roles</option>
                       {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </div>
-                  <div className="flex gap-1 ml-auto sm:ml-0">
-                    <button onClick={applyFilters} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-900 shadow-sm transition-transform active:scale-95">Filtrar</button>
-                    <button onClick={clearFilters} className="bg-white text-slate-500 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-bold hover:text-red-600 hover:border-red-200 shadow-sm transition-transform active:scale-95"><RotateCcw className="w-3 h-3" /></button>
+                  {activeTab === 'diagram_list' && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-slate-200 grow sm:grow-0">
+                      <input
+                        value={tempSearch}
+                        onChange={(e) => setTempSearch(e.target.value)}
+                        placeholder="Search by activity name, code, or role..."
+                        className="bg-transparent border-none px-1 py-0.5 text-xs w-full sm:w-60 focus:outline-none focus:ring-0"
+                      />
+                    </div>
+                  )}
+                  <div className="flex gap-1 ml-auto">
+                    <button onClick={applyFilters} className="bg-slate-900 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold hover:bg-black shadow-sm transition-transform active:scale-95">Filtrar</button>
+                    <button onClick={clearFilters} className="bg-white text-slate-500 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-semibold hover:text-red-600 hover:border-red-200 shadow-sm transition-transform active:scale-95"><RotateCcw className="w-3 h-3" /></button>
                   </div>
                 </div>
               </div>
@@ -984,16 +1069,17 @@ export default function App() {
                                         if (getOpacity(act) === 'hidden') return null;
                                         
                                         return (
-                                            <div key={act.id} className="group relative bg-white rounded-xl shadow-sm border border-slate-200 p-5 hover:shadow-md hover:border-slate-300 transition-all flex flex-col h-full overflow-hidden">
+                                            <div key={act.id} className={`group relative rounded-xl shadow-sm border p-5 hover:shadow-md transition-all flex flex-col h-full overflow-hidden ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50 border-slate-200 hover:border-slate-300' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
                                                 {/* Línea indicadora de herencia de color */}
                                                 <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: phaseColor }}></div>
                                                 
                                                 {/* Header de la Tarjeta */}
                                                 <div className="flex justify-between items-start mb-3 pl-2">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">N°: {displayOrderByActivityId[act.id] || 0}</span>
-                                                        <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[act.role] || 'bg-slate-100 text-slate-600'}`}>
-                                                            {act.role}
+                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`}</span>
+                                                        <span className="text-[10px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-md tracking-wider">#{displayOrderByActivityId[act.id] || 0}</span>
+                                                        <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
+                                                            {getPrimaryRoleName(act) || 'Sin rol'}
                                                         </span>
                                                     </div>
                                                     {act.duration && act.duration !== 'N/A' && (
@@ -1010,6 +1096,16 @@ export default function App() {
 
                                                 {/* Meta información compacta en el fondo de la tarjeta */}
                                                 <div className="flex flex-col gap-2 pl-2 mt-auto">
+                                                    <div className="flex flex-wrap gap-1">
+                                                      <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
+                                                        Primary: {getPrimaryRoleName(act) || 'No definido'}
+                                                      </span>
+                                                      {getSupportRoleNames(act).map(role => (
+                                                        <span key={`${act.id}-${role}`} className="text-[10px] px-2 py-1 rounded-md font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                                                          Support: {role}
+                                                        </span>
+                                                      ))}
+                                                    </div>
                                                     {/* Condicional */}
                                                     {act.condition && (
                                                         <div className="flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 px-2.5 py-1.5 rounded-md border border-amber-100 font-medium w-full">
@@ -1141,11 +1237,15 @@ export default function App() {
                                   onDragStart={(event) => startActivityDrag(event, act.id)}
                                   onDragEnd={endActivityDrag}
                                   onClick={() => startEdit(act)}
-                                  className={`relative p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
+                                  className={`relative p-3 rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50/80' : 'bg-white'} ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
                                 >
                                     <div className="pr-6">
+                                        <p className="text-[10px] font-black text-slate-500 tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`} | #{displayOrderByActivityId[act.id] || 0}</p>
                                         <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
-                                        <span className="text-[10px] text-slate-400">N°: {displayOrderByActivityId[act.id] || 0}</span>
+                                        <p className="text-[10px] text-slate-500 truncate"><span className="font-semibold">Primary:</span> {getPrimaryRoleName(act) || 'No definido'}</p>
+                                        {getSupportRoleNames(act).length > 0 && (
+                                          <p className="text-[10px] text-slate-400 truncate"><span className="font-semibold">Support:</span> {getSupportRoleNames(act).join(', ')}</p>
+                                        )}
                                     </div>
                                     <div className="absolute bottom-2 right-2 flex items-center gap-1">
                                       <button
@@ -1203,7 +1303,7 @@ export default function App() {
                </h2>
                {!isEditingActivity && insertBeforeId && (
                   <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} en la posición del ID {insertBeforeId}.
+                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} antes de {activityCodeById[insertBeforeId] || `ID-${insertBeforeId}`}.
                   </div>
                )}
                <div className="grid grid-cols-1 gap-5 max-w-2xl">
@@ -1226,6 +1326,25 @@ export default function App() {
                          </select>
                      </div>
                      <div>
+                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Roles de Soporte</label>
+                         <div className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-slate-50 max-h-24 overflow-y-auto space-y-1">
+                           {availableRoles.filter(role => role !== formData.role).map(role => (
+                             <label key={role} className="flex items-center gap-2 text-slate-600">
+                               <input
+                                 type="checkbox"
+                                 checked={(formData.support_roles || []).includes(role)}
+                                 onChange={(event) => {
+                                   const current = formData.support_roles || [];
+                                   const support_roles = event.target.checked ? [...current, role] : current.filter(item => item !== role);
+                                   setFormData({ ...formData, support_roles });
+                                 }}
+                               />
+                               {role}
+                             </label>
+                           ))}
+                         </div>
+                      </div>
+                     <div>
                          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Duración</label>
                          <input
                             className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -1235,8 +1354,30 @@ export default function App() {
                          />
                      </div>
                      <div>
-                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Predecesores (IDs)</label>
-                         <input className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none" placeholder="Ej: 1, 3" value={Array.isArray(formData.predecessors) ? formData.predecessors.join(',') : formData.predecessors} onChange={e=>setFormData({...formData, predecessors: e.target.value})} />
+                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Predecesores</label>
+                         <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg bg-slate-50 p-2 space-y-1">
+                            {sortedActivities
+                              .filter(activity => activity.id !== isEditingActivity)
+                              .map(activity => {
+                                const selected = (Array.isArray(formData.predecessors) ? formData.predecessors : []).includes(activity.id);
+                                return (
+                                  <label key={activity.id} className={`flex items-center gap-2 text-xs p-1.5 rounded-md cursor-pointer ${selected ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-600 hover:bg-white'}`}>
+                                    <input
+                                      type="checkbox"
+                                      checked={selected}
+                                      onChange={(event) => {
+                                        const current = Array.isArray(formData.predecessors) ? formData.predecessors : [];
+                                        const predecessors = event.target.checked
+                                          ? [...current, activity.id]
+                                          : current.filter(id => id !== activity.id);
+                                        setFormData({ ...formData, predecessors });
+                                      }}
+                                    />
+                                    <span>{activityCodeById[activity.id] || `ID-${activity.id}`}</span>
+                                  </label>
+                                );
+                              })}
+                         </div>
                      </div>
                   </div>
                   <div>
