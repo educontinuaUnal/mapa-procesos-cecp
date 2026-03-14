@@ -323,6 +323,13 @@ export default function App() {
     nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxActivityRefNumber + 1);
   }, [maxActivityRefNumber]);
 
+  const editingActivityRef = isEditingActivity
+    ? (activityRefById[isEditingActivity] || `ID-${isEditingActivity}`)
+    : '';
+  const editingActivityOrder = isEditingActivity
+    ? (displayOrderByActivityId[isEditingActivity] || isEditingActivity)
+    : '';
+
   const activitiesById = useMemo(
     () => Object.fromEntries(activities.map(activity => [activity.id, activity])),
     [activities]
@@ -1662,113 +1669,153 @@ export default function App() {
 
             {/* FORMULARIO EDITAR */}
             <div className="flex-1 bg-white p-8 overflow-y-auto" onClick={() => setSelectedActivityId(null)}>
-               <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-4">
-                 {isEditingActivity ? <Edit2 className="w-5 h-5 text-blue-600"/> : <Plus className="w-5 h-5 text-emerald-600"/>}
-                 {isEditingActivity ? `Editar Actividad #${isEditingActivity}` : 'Crear Nueva Actividad'}
-               </h2>
+               <div className="mb-6 border-b border-slate-100 pb-4">
+                 <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                   {isEditingActivity ? <Edit2 className="w-5 h-5 text-blue-600"/> : <Plus className="w-5 h-5 text-emerald-600"/>}
+                   {isEditingActivity ? `Editar Actividad ${editingActivityRef}` : 'Crear Nueva Actividad'}
+                 </h2>
+                 {isEditingActivity && (
+                   <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                     <span className="px-2 py-1 rounded-md bg-slate-100 font-semibold text-slate-600">Codigo: {editingActivityRef}</span>
+                     <span className="px-2 py-1 rounded-md bg-blue-50 font-semibold text-blue-700">Orden: #{editingActivityOrder}</span>
+                   </div>
+                 )}
+               </div>
                {!isEditingActivity && insertBeforeId && (
                   <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
                     La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} antes de {activityRefById[insertBeforeId] || `ID-${insertBeforeId}`}.
                   </div>
                )}
-               <div className="grid grid-cols-1 gap-5 max-w-2xl">
-                  <div>
-                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Fase del Proceso</label>
-                      <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all" value={formData.phaseId} onChange={e=>setFormData({...formData, phaseId: e.target.value})}>
-                          {phases.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}
-                      </select>
-                  </div>
-                  <div>
-                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Descripción</label>
-                      <textarea className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all h-24" value={formData.text} onChange={e=>setFormData({...formData, text: e.target.value})} />
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                     <div>
-                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Rol Responsable</label>
-                         <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none" value={formData.role} onChange={e=>setFormData({...formData, role: e.target.value})}>
-                             <option value="">Seleccionar...</option>
-                             {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
-                         </select>
-                     </div>
-                     <div>
-                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Roles de Soporte</label>
-                         <div className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-slate-50 max-h-24 overflow-y-auto space-y-1">
-                           {availableRoles.filter(role => role !== formData.role).map(role => (
-                             <label key={role} className="flex items-center gap-2 text-slate-600">
+               <div className="grid grid-cols-1 gap-6 max-w-3xl">
+                  <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:p-5">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-4">Informacion basica</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Fase del Proceso</label>
+                        <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all" value={formData.phaseId} onChange={e=>setFormData({...formData, phaseId: e.target.value})}>
+                            {phases.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Tipo de Nodo</label>
+                        <div className="flex flex-wrap gap-2">
+                            <button onClick={() => setFormData({...formData, type: 'process'})} className={`px-3 py-1.5 text-xs rounded-md border ${formData.type === 'process' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600'}`}>Proceso</button>
+                            <button onClick={() => setFormData({...formData, type: 'decision'})} className={`px-3 py-1.5 text-xs rounded-md border ${formData.type === 'decision' ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-600'}`}>Decision</button>
+                            <button onClick={() => setFormData({...formData, type: 'start'})} className={`px-3 py-1.5 text-xs rounded-md border ${formData.type === 'start' ? 'bg-emerald-500 text-white border-emerald-600' : 'bg-white text-slate-600'}`}>Inicio</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Duracion</label>
+                        <input
+                          className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          placeholder="Ej: 3 dias"
+                          value={formData.duration}
+                          onChange={e => setFormData({...formData, duration: e.target.value})}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Condicion</label>
+                        <input
+                          className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          placeholder="Ej: Si es viable"
+                          value={formData.condition}
+                          onChange={e => setFormData({...formData, condition: e.target.value})}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Origen</label>
+                        <input
+                          className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          placeholder="Ej: Tendencias"
+                          value={formData.origin}
+                          onChange={e => setFormData({...formData, origin: e.target.value})}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Descripcion</label>
+                      <textarea className="w-full p-3 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all min-h-[120px]" value={formData.text} onChange={e=>setFormData({...formData, text: e.target.value})} />
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-white p-4 md:p-5">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-4">Roles</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="md:col-span-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Rol Responsable</label>
+                        <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none" value={formData.role} onChange={e=>setFormData({...formData, role: e.target.value})}>
+                            <option value="">Seleccionar...</option>
+                            {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Roles de Soporte</label>
+                        <div className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-slate-50 max-h-28 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {availableRoles.filter(role => role !== formData.role).map(role => (
+                            <label key={role} className="flex items-center gap-2 text-slate-600">
+                              <input
+                                type="checkbox"
+                                checked={(formData.support_roles || []).includes(role)}
+                                onChange={(event) => {
+                                  const current = formData.support_roles || [];
+                                  const support_roles = event.target.checked ? [...current, role] : current.filter(item => item !== role);
+                                  setFormData({ ...formData, support_roles });
+                                }}
+                              />
+                              {role}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-white p-4 md:p-5">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-4">Dependencias</h3>
+                    <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-lg bg-slate-50 p-2 space-y-1">
+                       {sortedActivities
+                         .filter(activity => activity.id !== isEditingActivity)
+                         .map(activity => {
+                           const selected = (Array.isArray(formData.predecessors) ? formData.predecessors : []).includes(activity.id);
+                           return (
+                             <label key={activity.id} className={`flex items-center gap-2 text-xs p-1.5 rounded-md cursor-pointer ${selected ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-600 hover:bg-white'}`}>
                                <input
                                  type="checkbox"
-                                 checked={(formData.support_roles || []).includes(role)}
+                                 checked={selected}
                                  onChange={(event) => {
-                                   const current = formData.support_roles || [];
-                                   const support_roles = event.target.checked ? [...current, role] : current.filter(item => item !== role);
-                                   setFormData({ ...formData, support_roles });
+                                   const current = Array.isArray(formData.predecessors) ? formData.predecessors : [];
+                                   const predecessors = event.target.checked
+                                     ? [...current, activity.id]
+                                     : current.filter(id => id !== activity.id);
+                                   setFormData({ ...formData, predecessors });
                                  }}
                                />
-                               {role}
+                               <span>{`${activityRefById[activity.id] || `ID-${activity.id}`} — ${activity.text}`}</span>
                              </label>
-                           ))}
-                         </div>
-                      </div>
-                     <div>
-                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Duración</label>
-                         <input
-                            className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                            placeholder="Ej: 3 días"
-                            value={formData.duration}
-                            onChange={e => setFormData({...formData, duration: e.target.value})}
-                         />
-                     </div>
-                     <div>
-                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Predecesores</label>
-                         <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg bg-slate-50 p-2 space-y-1">
-                            {sortedActivities
-                              .filter(activity => activity.id !== isEditingActivity)
-                              .map(activity => {
-                                const selected = (Array.isArray(formData.predecessors) ? formData.predecessors : []).includes(activity.id);
-                                return (
-                                  <label key={activity.id} className={`flex items-center gap-2 text-xs p-1.5 rounded-md cursor-pointer ${selected ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-600 hover:bg-white'}`}>
-                                    <input
-                                      type="checkbox"
-                                      checked={selected}
-                                      onChange={(event) => {
-                                        const current = Array.isArray(formData.predecessors) ? formData.predecessors : [];
-                                        const predecessors = event.target.checked
-                                          ? [...current, activity.id]
-                                          : current.filter(id => id !== activity.id);
-                                        setFormData({ ...formData, predecessors });
-                                      }}
-                                    />
-                                    <span>{`${activityRefById[activity.id] || `ID-${activity.id}`} — ${activity.text}`}</span>
-                                  </label>
-                                );
-                              })}
-                         </div>
-                     </div>
-                  </div>
-                  <div>
-                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Tipo de Nodo</label>
-                      <div className="flex gap-2">
-                          <button onClick={() => setFormData({...formData, type: 'process'})} className={`px-3 py-1.5 text-xs rounded-md border ${formData.type === 'process' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600'}`}>Proceso</button>
-                          <button onClick={() => setFormData({...formData, type: 'decision'})} className={`px-3 py-1.5 text-xs rounded-md border ${formData.type === 'decision' ? 'bg-amber-500 text-white border-amber-600' : 'bg-white text-slate-600'}`}>Decisión</button>
-                          <button onClick={() => setFormData({...formData, type: 'start'})} className={`px-3 py-1.5 text-xs rounded-md border ${formData.type === 'start' ? 'bg-emerald-500 text-white border-emerald-600' : 'bg-white text-slate-600'}`}>Inicio</button>
-                      </div>
-                  </div>
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                      <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Rutas Asociadas</label>
-                      <div className="flex gap-2 flex-wrap">
-                          {flows.map(f => (
-                              <label key={f.id} className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full cursor-pointer border transition-all ${formData.flows.includes(f.id) ? 'bg-blue-50 border-blue-200 text-blue-700 font-bold' : 'bg-white border-slate-200 text-slate-600'}`}>
-                                  <input type="checkbox" className="hidden" checked={formData.flows.includes(f.id)} onChange={e => {
-                                      const newFlows = e.target.checked ? [...formData.flows, f.id] : formData.flows.filter(id => id !== f.id);
-                                      setFormData({...formData, flows: newFlows});
-                                  }} /> 
-                                  {formData.flows.includes(f.id) && <CheckCircle2 className="w-3 h-3"/>}
-                                  {f.label.replace('Ruta: ','')}
-                              </label>
-                          ))}
-                      </div>
-                  </div>
-                  <div className="flex gap-3 mt-4">
+                           );
+                         })}
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-slate-50 p-4 md:p-5">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">Rutas Asociadas</h3>
+                    <div className="flex gap-2 flex-wrap">
+                        {flows.map(f => (
+                            <label key={f.id} className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full cursor-pointer border transition-all ${formData.flows.includes(f.id) ? 'bg-blue-50 border-blue-200 text-blue-700 font-bold' : 'bg-white border-slate-200 text-slate-600'}`}>
+                                <input type="checkbox" className="hidden" checked={formData.flows.includes(f.id)} onChange={e => {
+                                    const newFlows = e.target.checked ? [...formData.flows, f.id] : formData.flows.filter(id => id !== f.id);
+                                    setFormData({...formData, flows: newFlows});
+                                }} /> 
+                                {formData.flows.includes(f.id) && <CheckCircle2 className="w-3 h-3"/>}
+                                {f.label.replace('Ruta: ','')}
+                            </label>
+                        ))}
+                    </div>
+                  </section>
+
+                  <div className="flex gap-3 pt-2">
                       <button onClick={handleSaveActivity} className="flex-1 bg-slate-900 text-white py-2.5 rounded-lg font-bold shadow-lg hover:bg-black transition-all transform active:scale-95 flex justify-center items-center gap-2"><Save className="w-4 h-4"/> Guardar Cambios</button>
                       {(isEditingActivity || insertBeforeId) && (<button onClick={resetForm} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
                   </div>
