@@ -27,6 +27,12 @@ const db = getFirestore(app);
 // Rutas de colección para la base de datos
 const APP_ID = 'mapa-cecp-app';
 const getStageColPath = (stageId, colName) => `artifacts/${APP_ID}/public/data/stages/${stageId}/${colName}`;
+const ACTIVITY_REF_PREFIX = 'ACT-';
+const formatActivityRef = (value) => `${ACTIVITY_REF_PREFIX}${String(value).padStart(3, '0')}`;
+const getActivityRefNumber = (activityRef = '') => {
+  const match = `${activityRef}`.match(/^(?:ACT-)?(\d+)$/i);
+  return match ? parseInt(match[1], 10) : 0;
+};
 
 const processStages = [
   { id: 'formulacion', title: 'Formulación', description: 'Diseño y estructuración del proceso', color: 'from-blue-600 to-indigo-600' },
@@ -165,6 +171,7 @@ export default function App() {
   const nodeRefs = useRef({});
   const containerRef = useRef(null);
   const initializedRef = useRef({});
+  const nextActivityRefCounter = useRef(1);
 
   // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
@@ -225,17 +232,40 @@ export default function App() {
     return result;
   }, [sortedActivities]);
 
-  const activityCodeById = useMemo(() => {
-    const result = {};
-    phases.forEach((phase, phaseIdx) => {
-      const phaseNumber = phaseIdx + 1;
-      sortedActivities.filter(activity => activity.phaseId === phase.id).forEach((activity, activityIdx) => {
-        const activityNumber = String(activityIdx + 1).padStart(2, '0');
-        result[activity.id] = `F${phaseNumber}-A${activityNumber}`;
+  const maxActivityRefNumber = useMemo(
+    () => activities.reduce((max, activity) => Math.max(max, getActivityRefNumber(activity.activity_ref)), 0),
+    [activities]
+  );
+
+  useEffect(() => {
+    nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxActivityRefNumber + 1);
+  }, [maxActivityRefNumber]);
+
+  const activitiesById = useMemo(
+    () => Object.fromEntries(activities.map(activity => [activity.id, activity])),
+    [activities]
+  );
+
+  const childrenByPredecessorId = useMemo(() => {
+    const map = new Map();
+    activities.forEach(activity => {
+      (activity.predecessors || []).forEach((predecessorId) => {
+        if (!map.has(predecessorId)) map.set(predecessorId, []);
+        map.get(predecessorId).push(activity.id);
       });
     });
+    return map;
+  }, [activities]);
+
+  const activityRefById = useMemo(() => {
+    const result = {};
+    activities.forEach(activity => {
+      if (activity.activity_ref) {
+        result[activity.id] = activity.activity_ref;
+      }
+    });
     return result;
-  }, [phases, sortedActivities]);
+  }, [activities]);
 
   const matchesSearch = useCallback((activity) => {
     if (activeTab !== 'diagram_list') return true;
@@ -243,14 +273,14 @@ export default function App() {
     const query = activeSearch.trim().toLowerCase();
     const roleNames = getActivityRoles(activity).map(role => role.role_name).join(' ').toLowerCase();
     const haystack = [
-      activityCodeById[activity.id] || '',
+      activityRefById[activity.id] || '',
       activity.text || '',
       activity.origin || '',
       activity.condition || '',
       roleNames,
     ].join(' ').toLowerCase();
     return haystack.includes(query);
-  }, [activeSearch, activityCodeById, getActivityRoles, activeTab]);
+  }, [activeSearch, activityRefById, getActivityRoles, activeTab]);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -275,99 +305,137 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
+    let isDisposed = false;
+    let unsubFlows = () => {};
+    let unsubPhases = () => {};
+    let unsubActs = () => {};
 
-    const setupDatabase = async () => {
-      // Escuchar Rutas
-      const stageColPath = (colName) => getStageColPath(activeStage, colName);
-      const stageDefaultsData = stageDefaults[activeStage];
+    const stageColPath = (colName) => getStageColPath(activeStage, colName);
+    const stageDefaultsData = stageDefaults[activeStage];
 
-      const unsubFlows = onSnapshot(collection(db, stageColPath('flows')), (snapshot) => {
+    const bootstrapStageData = async () => {
+      initializedRef.current[activeStage] = true;
+      const batch = writeBatch(db);
+      stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
+      stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
+      stageDefaultsData.activities.forEach((a, index) => {
+        const activity_ref = formatActivityRef(index + 1);
+        batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP, activity_ref });
+      });
+      await batch.commit();
+      nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, stageDefaultsData.activities.length + 1);
+    };
+
+    const listen = async () => {
+      unsubFlows = onSnapshot(collection(db, stageColPath('flows')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
         if (data.length === 0 && !initializedRef.current[activeStage]) {
-           data = stageDefaultsData.flows;
+          data = stageDefaultsData.flows;
         }
         setFlows(data);
       }, (error) => console.error(error));
 
-      // Escuchar Fases
-      const unsubPhases = onSnapshot(collection(db, stageColPath('phases')), (snapshot) => {
+      unsubPhases = onSnapshot(collection(db, stageColPath('phases')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
         data.sort((a, b) => a.title.localeCompare(b.title));
         if (data.length === 0 && !initializedRef.current[activeStage]) {
-           data = stageDefaultsData.phases;
+          data = stageDefaultsData.phases;
         }
         setPhases(data);
       }, (error) => console.error(error));
 
-      // Escuchar Actividades
-      const unsubActs = onSnapshot(collection(db, stageColPath('activities')), async (snapshot) => {
-        let data = snapshot.docs.map(doc => doc.data());
+      unsubActs = onSnapshot(collection(db, stageColPath('activities')), async (snapshot) => {
+        if (isDisposed) return;
+        let data = snapshot.docs.map(currentDoc => currentDoc.data());
 
         if (data.length === 0 && !initializedRef.current[activeStage]) {
-           initializedRef.current[activeStage] = true;
-           const batch = writeBatch(db);
-           stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
-           stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
-           stageDefaultsData.activities.forEach((a, index) => batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP }));
-           await batch.commit();
-           data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP }));
+          await bootstrapStageData();
+          if (isDisposed) return;
+          data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP, activity_ref: formatActivityRef(index + 1) }));
         }
 
-        const missingOrder = data.filter(activity => typeof activity.order_index !== 'number');
-        if (missingOrder.length > 0) {
-          const batch = writeBatch(db);
-          const phaseCatalog = data.length > 0
-            ? Array.from(new Set(data.map(activity => activity.phaseId))).map(id => ({ id }))
-            : stageDefaultsData.phases;
+        const phaseBuckets = new Map();
+        data.forEach(activity => {
+          if (!phaseBuckets.has(activity.phaseId)) phaseBuckets.set(activity.phaseId, []);
+          phaseBuckets.get(activity.phaseId).push(activity);
+        });
 
-          phaseCatalog.forEach(phase => {
-            const phaseActivities = data
-              .filter(activity => activity.phaseId === phase.id)
-              .sort((a, b) => a.id - b.id);
-            phaseActivities.forEach((activity, index) => {
-              if (typeof activity.order_index !== 'number') {
-                const order_index = (index + 1) * ORDER_GAP;
-                activity.order_index = order_index;
-                batch.set(doc(db, stageColPath('activities'), activity.id.toString()), { order_index }, { merge: true });
-              }
-            });
+        const batch = writeBatch(db);
+        let hasActivityFixes = false;
+        let maxRef = data.reduce((max, activity) => Math.max(max, getActivityRefNumber(activity.activity_ref)), 0);
+
+        phaseBuckets.forEach((phaseActivities) => {
+          phaseActivities.sort((a, b) => a.id - b.id);
+          phaseActivities.forEach((activity, index) => {
+            const updates = {};
+            if (typeof activity.order_index !== 'number') {
+              updates.order_index = (index + 1) * ORDER_GAP;
+              activity.order_index = updates.order_index;
+            }
+            if (!activity.activity_ref) {
+              maxRef += 1;
+              updates.activity_ref = formatActivityRef(maxRef);
+              activity.activity_ref = updates.activity_ref;
+            }
+            if (Object.keys(updates).length > 0) {
+              hasActivityFixes = true;
+              batch.set(doc(db, stageColPath('activities'), activity.id.toString()), updates, { merge: true });
+            }
           });
+        });
+
+        if (hasActivityFixes) {
           await batch.commit();
+          if (isDisposed) return;
         }
 
-        data = data.map(normalizeActivityModel);
-        setActivities(data);
+        nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxRef + 1);
+        setActivities(data.map(normalizeActivityModel));
         setIsLoading(false);
       }, (error) => console.error(error));
-
-      return () => { unsubFlows(); unsubPhases(); unsubActs(); };
     };
 
-    const cleanup = setupDatabase();
-    return () => cleanup;
+    listen();
+    return () => {
+      isDisposed = true;
+      unsubFlows();
+      unsubPhases();
+      unsubActs();
+    };
   }, [user, activeStage, normalizeActivityModel]);
 
 
-  const getDownstreamPath = useCallback((startId, allActs = activities) => {
-    let path = new Set([startId]);
-    let queue = [startId];
-    while(queue.length > 0) {
+  const getDownstreamPath = useCallback((startId) => {
+    const path = new Set([startId]);
+    const queue = [startId];
+    while (queue.length > 0) {
       const current = queue.shift();
-      const children = allActs.filter(a => a.predecessors.includes(current));
-      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
+      const children = childrenByPredecessorId.get(current) || [];
+      children.forEach((childId) => {
+        if (!path.has(childId)) {
+          path.add(childId);
+          queue.push(childId);
+        }
+      });
     }
     return path;
-  }, [activities]);
+  }, [childrenByPredecessorId]);
 
-  const getUpstreamPath = useCallback((startId, allActs = activities) => {
-    let path = new Set([startId]);
-    const findParents = (id) => {
-      const act = allActs.find(a => a.id === id);
-      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
-    };
-    findParents(startId);
+  const getUpstreamPath = useCallback((startId) => {
+    const path = new Set([startId]);
+    const queue = [startId];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const activity = activitiesById[current];
+      (activity?.predecessors || []).forEach((predecessorId) => {
+        if (!path.has(predecessorId)) {
+          path.add(predecessorId);
+          queue.push(predecessorId);
+        }
+      });
+    }
     return path;
-  }, [activities]);
+  }, [activitiesById]);
 
   const getOpacity = useCallback((act) => {
     const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
@@ -400,7 +468,7 @@ export default function App() {
 
           act.predecessors.forEach(predId => {
             const startNode = nodeRefs.current[predId];
-            const predAct = activities.find(a => a.id === predId);
+            const predAct = activitiesById[predId];
 
             if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
               const startRect = startNode.getBoundingClientRect();
@@ -464,7 +532,7 @@ export default function App() {
         if (container) container.removeEventListener('scroll', calculateLines);
         window.removeEventListener('resize', calculateLines);
     };
-  }, [activities, activeFilters, activeTab, flows, selectedActivityId, getDownstreamPath, getOpacity, getUpstreamPath]);
+  }, [activities, activitiesById, activeFilters, activeTab, flows, selectedActivityId, getDownstreamPath, getOpacity, getUpstreamPath]);
 
   // --- NAVEGACIÓN Y SEGURIDAD ---
   const handleEditorTabClick = () => {
@@ -759,6 +827,7 @@ export default function App() {
       const docId = isEditingActivity.toString();
       const currentActivity = activities.find(activity => activity.id === isEditingActivity);
       newActivity.id = parseInt(docId);
+      newActivity.activity_ref = currentActivity?.activity_ref || newActivity.activity_ref;
       if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
         newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
       } else {
@@ -775,7 +844,9 @@ export default function App() {
         id: nextId,
         phaseId,
         order_index,
+        activity_ref: formatActivityRef(nextActivityRefCounter.current),
       });
+      nextActivityRefCounter.current += 1;
     }
 
     resetForm();
@@ -811,8 +882,7 @@ export default function App() {
     const phaseColor = getPhaseHexColor(phaseObj);
     const isDecision = activity.type === 'decision';
     const displayNumber = displayOrderByActivityId[activity.id] || 0;
-    const activityCode = activityCodeById[activity.id] || `ID-${activity.id}`;
-    const isSupport = getSupportRoleNames(activity).length > 0;
+    const activityRef = activityRefById[activity.id] || `ID-${activity.id}`;
     const primaryRole = getPrimaryRoleName(activity) || 'Sin rol';
     const supportRoles = getSupportRoleNames(activity);
     
@@ -820,14 +890,14 @@ export default function App() {
         ? 'w-10 h-10 rotate-45 border-2 rounded-sm text-white' 
         : `w-10 h-10 rounded-full border-2 border-white shadow-md text-white`;
         
-    const customStyle = isDecision 
-        ? { backgroundColor: isSupport ? '#9ca3af99' : '#9ca3af', borderColor: '#6b7280' } 
-        : { backgroundColor: isSupport ? `${phaseColor}99` : phaseColor };
+    const customStyle = isDecision
+        ? { backgroundColor: '#9ca3af', borderColor: '#6b7280' }
+        : { backgroundColor: phaseColor };
         
     const contentRotate = isDecision ? '-rotate-45' : '';
 
     return (
-      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20, filter: isSupport ? 'saturate(0.7)' : 'none' }}>
+      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20 }}>
         <div 
             onClick={(e) => { e.stopPropagation(); setSelectedActivityId(isSelected ? null : activity.id); }}
             className={`flex items-center justify-center font-bold text-xs cursor-pointer transition-transform duration-200 hover:scale-110 active:scale-95 shadow-sm ${shapeClasses} ${isSelected ? 'ring-4 ring-offset-2 ring-blue-300' : ''}`}
@@ -835,11 +905,10 @@ export default function App() {
         >
             <span className={`${contentRotate}`}>{displayNumber}</span>
         </div>
-        <span className={`absolute top-full mt-1 text-[9px] font-black tracking-wide ${isSupport ? 'text-slate-400' : 'text-slate-500'}`}>{activityCode}</span>
         <div className={`absolute left-16 top-1/2 -translate-y-1/2 w-72 bg-white rounded-xl shadow-2xl border border-slate-100 transition-all duration-300 pointer-events-none origin-left z-[101] ${isSelected ? 'opacity-100 scale-100 translate-x-0' : 'opacity-0 scale-95 -translate-x-4 pointer-events-none'}`}>
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
             <div className="flex justify-between items-center p-3 border-b border-slate-50 bg-slate-50/50 rounded-t-xl">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{activityCode} · #{displayNumber}</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{activityRef} · #{displayNumber}</span>
                 <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase ring-1 ring-inset ring-white/60 ${roleBadges[primaryRole] || 'bg-slate-100'}`}>{primaryRole}</span>
             </div>
             <div className="p-4">
@@ -1076,7 +1145,7 @@ export default function App() {
                                                 {/* Header de la Tarjeta */}
                                                 <div className="flex justify-between items-start mb-3 pl-2">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`}</span>
+                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">{activityRefById[act.id] || `ID-${act.id}`}</span>
                                                         <span className="text-[10px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-md tracking-wider">#{displayOrderByActivityId[act.id] || 0}</span>
                                                         <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
                                                             {getPrimaryRoleName(act) || 'Sin rol'}
@@ -1119,7 +1188,7 @@ export default function App() {
                                                         {act.predecessors && act.predecessors.length > 0 && (
                                                             <div className="flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
                                                                 <GitBranch className="w-3 h-3 text-slate-400" />
-                                                                <span>Dep: {act.predecessors.join(', ')}</span>
+                                                                <span>Dep: {(act.predecessors || []).map((predecessorId) => activityRefById[predecessorId] || `ID-${predecessorId}`).join(', ')}</span>
                                                             </div>
                                                         )}
                                                         {act.flows && act.flows.length > 0 && (
@@ -1240,7 +1309,7 @@ export default function App() {
                                   className={`relative p-3 rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50/80' : 'bg-white'} ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
                                 >
                                     <div className="pr-6">
-                                        <p className="text-[10px] font-black text-slate-500 tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`} | #{displayOrderByActivityId[act.id] || 0}</p>
+                                        <p className="text-[10px] font-black text-slate-500 tracking-wider">{activityRefById[act.id] || `ID-${act.id}`} | #{displayOrderByActivityId[act.id] || 0}</p>
                                         <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
                                         <p className="text-[10px] text-slate-500 truncate"><span className="font-semibold">Primary:</span> {getPrimaryRoleName(act) || 'No definido'}</p>
                                         {getSupportRoleNames(act).length > 0 && (
@@ -1303,7 +1372,7 @@ export default function App() {
                </h2>
                {!isEditingActivity && insertBeforeId && (
                   <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} antes de {activityCodeById[insertBeforeId] || `ID-${insertBeforeId}`}.
+                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} antes de {activityRefById[insertBeforeId] || `ID-${insertBeforeId}`}.
                   </div>
                )}
                <div className="grid grid-cols-1 gap-5 max-w-2xl">
@@ -1373,7 +1442,7 @@ export default function App() {
                                         setFormData({ ...formData, predecessors });
                                       }}
                                     />
-                                    <span>{activityCodeById[activity.id] || `ID-${activity.id}`}</span>
+                                    <span>{`${activityRefById[activity.id] || `ID-${activity.id}`} — ${activity.text}`}</span>
                                   </label>
                                 );
                               })}
