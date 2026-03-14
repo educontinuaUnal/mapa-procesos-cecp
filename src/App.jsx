@@ -323,13 +323,6 @@ export default function App() {
     nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxActivityRefNumber + 1);
   }, [maxActivityRefNumber]);
 
-  const editingActivityRef = isEditingActivity
-    ? (activityRefById[isEditingActivity] || `ID-${isEditingActivity}`)
-    : '';
-  const editingActivityOrder = isEditingActivity
-    ? (displayOrderByActivityId[isEditingActivity] || isEditingActivity)
-    : '';
-
   const activitiesById = useMemo(
     () => Object.fromEntries(activities.map(activity => [activity.id, activity])),
     [activities]
@@ -355,6 +348,13 @@ export default function App() {
     });
     return result;
   }, [activities]);
+
+  const editingActivityRef = isEditingActivity
+    ? (activityRefById[isEditingActivity] || `ID-${isEditingActivity}`)
+    : '';
+  const editingActivityOrder = isEditingActivity
+    ? (displayOrderByActivityId[isEditingActivity] || isEditingActivity)
+    : '';
 
   const matchesSearch = useCallback((activity) => {
     if (activeTab !== 'diagram_list') return true;
