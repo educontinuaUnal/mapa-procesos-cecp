@@ -1,0 +1,27 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "activities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "phaseId", "order": "ASCENDING" },
+        { "fieldPath": "order_index", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activity_ref", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activity_role",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activity_id", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
