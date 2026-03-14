@@ -165,6 +165,7 @@ const getPhaseHexColor = (phase) => {
 
 const buildEmptyFormData = (phaseId = '') => ({
   text: '',
+  description: '',
   role: '',
   support_roles: [],
   duration: '',
@@ -364,6 +365,7 @@ export default function App() {
     const haystack = [
       activityRefById[activity.id] || '',
       activity.text || '',
+      activity.description || '',
       activity.origin || '',
       activity.condition || '',
       roleNames,
@@ -1109,7 +1111,7 @@ export default function App() {
     setInsertPhaseId(null);
     const primaryRole = getPrimaryRoleName(activity);
     const supportRoles = getSupportRoleNames(activity);
-    setFormData({ ...activity, role: primaryRole, support_roles: supportRoles, origin: activity.origin || '', condition: activity.condition || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
+    setFormData({ ...activity, role: primaryRole, support_roles: supportRoles, origin: activity.origin || '', condition: activity.condition || '', description: activity.description || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
     setActiveTab('editor');
   };
 
@@ -1168,7 +1170,12 @@ export default function App() {
                 </span>
             </div>
             <div className="p-4">
-                <p className="text-sm font-medium text-slate-800 leading-snug mb-3">{activity.text}</p>
+                <p className="text-sm font-medium text-slate-800 leading-snug mb-2">{activity.text}</p>
+                {activity.description && (
+                  <p className="text-xs text-slate-500 leading-snug mb-3">
+                    {activity.description}
+                  </p>
+                )}
                 {supportRoles.length > 0 && (
                   <div className="mb-3 text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-md px-2 py-1">
                     <span className="font-semibold text-slate-600">Support:</span> <span className="text-slate-400">{supportRoles.join(', ')}</span>
@@ -1420,9 +1427,16 @@ export default function App() {
                                                 </div>
 
                                                 {/* Título / Descripción */}
-                                                <p className="text-sm font-semibold text-slate-800 mb-4 pl-2 leading-relaxed flex-1">
-                                                    {act.text}
-                                                </p>
+                                                <div className="pl-2 mb-4 flex-1">
+                                                  <p className="text-sm font-semibold text-slate-800 leading-relaxed">
+                                                      {act.text}
+                                                  </p>
+                                                  {act.description && (
+                                                    <p className="text-xs text-slate-500 mt-2 leading-snug line-clamp-2">
+                                                      {act.description}
+                                                    </p>
+                                                  )}
+                                                </div>
 
                                                 {/* Meta información compacta en el fondo de la tarjeta */}
                                                 <div className="flex flex-col gap-2 pl-2 mt-auto">
@@ -1705,6 +1719,24 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+                    <div className="mt-4">
+                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Nombre</label>
+                      <input
+                        className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                        placeholder="Ej: Busqueda de posible docente"
+                        value={formData.text}
+                        onChange={e=>setFormData({...formData, text: e.target.value})}
+                      />
+                    </div>
+                    <div className="mt-4">
+                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Descripcion</label>
+                      <textarea
+                        className="w-full p-3 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all min-h-[110px]"
+                        placeholder="Detalle breve de la actividad"
+                        value={formData.description}
+                        onChange={e=>setFormData({...formData, description: e.target.value})}
+                      />
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                       <div>
                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Duracion</label>
@@ -1733,10 +1765,6 @@ export default function App() {
                           onChange={e => setFormData({...formData, origin: e.target.value})}
                         />
                       </div>
-                    </div>
-                    <div className="mt-4">
-                      <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Descripcion</label>
-                      <textarea className="w-full p-3 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all min-h-[120px]" value={formData.text} onChange={e=>setFormData({...formData, text: e.target.value})} />
                     </div>
                   </section>
 
