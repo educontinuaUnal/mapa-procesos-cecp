@@ -172,6 +172,7 @@ export default function App() {
   const nodeRefs = useRef({});
   const containerRef = useRef(null);
   const initializedRef = useRef({});
+  const nextActivityRefCounter = useRef(1);
 
   // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
@@ -243,6 +244,16 @@ export default function App() {
         result[activity.id] = activity.activity_ref;
       }
     });
+    return map;
+  }, [activities]);
+
+  const activityRefById = useMemo(() => {
+    const result = {};
+    activities.forEach(activity => {
+      if (activity.activity_ref) {
+        result[activity.id] = activity.activity_ref;
+      }
+    });
     return result;
   }, [sortedActivities]);
 
@@ -284,6 +295,26 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
+    let isDisposed = false;
+    let unsubFlows = () => {};
+    let unsubPhases = () => {};
+    let unsubActs = () => {};
+
+    const stageColPath = (colName) => getStageColPath(activeStage, colName);
+    const stageDefaultsData = stageDefaults[activeStage];
+
+    const bootstrapStageData = async () => {
+      initializedRef.current[activeStage] = true;
+      const batch = writeBatch(db);
+      stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
+      stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
+      stageDefaultsData.activities.forEach((a, index) => {
+        const activity_ref = formatActivityRef(index + 1);
+        batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP, activity_ref });
+      });
+      await batch.commit();
+      nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, stageDefaultsData.activities.length + 1);
+    };
 
     // Escuchar Rutas
     const stageColPath = (colName) => getStageColPath(activeStage, colName);
@@ -292,7 +323,7 @@ export default function App() {
     const unsubFlows = onSnapshot(collection(db, stageColPath('flows')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
         if (data.length === 0 && !initializedRef.current[activeStage]) {
-           data = stageDefaultsData.flows;
+          data = stageDefaultsData.flows;
         }
         setFlows(data);
     }, (error) => console.error(error));
@@ -302,7 +333,7 @@ export default function App() {
         let data = snapshot.docs.map(doc => doc.data());
         data.sort((a, b) => a.title.localeCompare(b.title));
         if (data.length === 0 && !initializedRef.current[activeStage]) {
-           data = stageDefaultsData.phases;
+          data = stageDefaultsData.phases;
         }
         setPhases(data);
     }, (error) => console.error(error));
@@ -365,11 +396,15 @@ export default function App() {
               batch.set(doc(db, stageColPath('activities'), activity.id.toString()), updatePayload, { merge: true });
             }
           });
+        });
+
+        if (hasActivityFixes) {
           await batch.commit();
+          if (isDisposed) return;
         }
 
-        data = data.map(normalizeActivityModel);
-        setActivities(data);
+        nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxRef + 1);
+        setActivities(data.map(normalizeActivityModel));
         setIsLoading(false);
     }, (error) => console.error(error));
 
@@ -385,26 +420,37 @@ export default function App() {
   );
 
 
-  const getDownstreamPath = useCallback((startId, allActs = activities) => {
-    let path = new Set([startId]);
-    let queue = [startId];
-    while(queue.length > 0) {
+  const getDownstreamPath = useCallback((startId) => {
+    const path = new Set([startId]);
+    const queue = [startId];
+    while (queue.length > 0) {
       const current = queue.shift();
-      const children = allActs.filter(a => a.predecessors.includes(current));
-      children.forEach(child => { if (!path.has(child.id)) { path.add(child.id); queue.push(child.id); } });
+      const children = childrenByPredecessorId.get(current) || [];
+      children.forEach((childId) => {
+        if (!path.has(childId)) {
+          path.add(childId);
+          queue.push(childId);
+        }
+      });
     }
     return path;
-  }, [activities]);
+  }, [childrenByPredecessorId]);
 
-  const getUpstreamPath = useCallback((startId, allActs = activities) => {
-    let path = new Set([startId]);
-    const findParents = (id) => {
-      const act = allActs.find(a => a.id === id);
-      if(act && act.predecessors) { act.predecessors.forEach(pid => { path.add(pid); findParents(pid); }); }
-    };
-    findParents(startId);
+  const getUpstreamPath = useCallback((startId) => {
+    const path = new Set([startId]);
+    const queue = [startId];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const activity = activitiesById[current];
+      (activity?.predecessors || []).forEach((predecessorId) => {
+        if (!path.has(predecessorId)) {
+          path.add(predecessorId);
+          queue.push(predecessorId);
+        }
+      });
+    }
     return path;
-  }, [activities]);
+  }, [activitiesById]);
 
   const getOpacity = useCallback((act) => {
     const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
@@ -437,7 +483,7 @@ export default function App() {
 
           act.predecessors.forEach(predId => {
             const startNode = nodeRefs.current[predId];
-            const predAct = activities.find(a => a.id === predId);
+            const predAct = activitiesById[predId];
 
             if (startNode && endNode && predAct && getOpacity(predAct) !== 'hidden') {
               const startRect = startNode.getBoundingClientRect();
@@ -501,7 +547,7 @@ export default function App() {
         if (container) container.removeEventListener('scroll', calculateLines);
         window.removeEventListener('resize', calculateLines);
     };
-  }, [activities, activeFilters, activeTab, flows, selectedActivityId, getDownstreamPath, getOpacity, getUpstreamPath]);
+  }, [activities, activitiesById, activeFilters, activeTab, flows, selectedActivityId, getDownstreamPath, getOpacity, getUpstreamPath]);
 
   // --- NAVEGACIÓN Y SEGURIDAD ---
   const handleEditorTabClick = () => {
@@ -796,6 +842,7 @@ export default function App() {
       const docId = isEditingActivity.toString();
       const currentActivity = activities.find(activity => activity.id === isEditingActivity);
       newActivity.id = parseInt(docId);
+      newActivity.activity_ref = currentActivity?.activity_ref || newActivity.activity_ref;
       if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
         newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
       } else {
@@ -822,6 +869,7 @@ export default function App() {
         order_index,
         activity_ref: formatActivityRef(maxRefSequence + 1),
       });
+      nextActivityRefCounter.current += 1;
     }
 
     resetForm();
