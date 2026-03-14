@@ -27,6 +27,13 @@ const db = getFirestore(app);
 // Rutas de colección para la base de datos
 const APP_ID = 'mapa-cecp-app';
 const getStageColPath = (stageId, colName) => `artifacts/${APP_ID}/public/data/stages/${stageId}/${colName}`;
+const formatActivityRef = (sequence) => `ACT-${String(sequence).padStart(3, '0')}`;
+const parseActivityRefSequence = (activityRef) => {
+  if (typeof activityRef !== 'string') return null;
+  const match = activityRef.match(/^ACT-(\d+)$/i);
+  if (!match) return null;
+  return parseInt(match[1], 10);
+};
 
 const processStages = [
   { id: 'formulacion', title: 'Formulación', description: 'Diseño y estructuración del proceso', color: 'from-blue-600 to-indigo-600' },
@@ -179,6 +186,10 @@ export default function App() {
   const [dragDropTarget, setDragDropTarget] = useState('none');
 
   const ORDER_GAP = 1024;
+  const phaseById = useMemo(
+    () => Object.fromEntries(phases.map((phase) => [phase.id, phase])),
+    [phases]
+  );
   const phaseOrderMap = useMemo(
     () => Object.fromEntries(phases.map((phase, index) => [phase.id, index])),
     [phases]
@@ -225,17 +236,15 @@ export default function App() {
     return result;
   }, [sortedActivities]);
 
-  const activityCodeById = useMemo(() => {
+  const activityRefById = useMemo(() => {
     const result = {};
-    phases.forEach((phase, phaseIdx) => {
-      const phaseNumber = phaseIdx + 1;
-      sortedActivities.filter(activity => activity.phaseId === phase.id).forEach((activity, activityIdx) => {
-        const activityNumber = String(activityIdx + 1).padStart(2, '0');
-        result[activity.id] = `F${phaseNumber}-A${activityNumber}`;
-      });
+    sortedActivities.forEach((activity) => {
+      if (activity.activity_ref) {
+        result[activity.id] = activity.activity_ref;
+      }
     });
     return result;
-  }, [phases, sortedActivities]);
+  }, [sortedActivities]);
 
   const matchesSearch = useCallback((activity) => {
     if (activeTab !== 'diagram_list') return true;
@@ -243,14 +252,14 @@ export default function App() {
     const query = activeSearch.trim().toLowerCase();
     const roleNames = getActivityRoles(activity).map(role => role.role_name).join(' ').toLowerCase();
     const haystack = [
-      activityCodeById[activity.id] || '',
+      activityRefById[activity.id] || '',
       activity.text || '',
       activity.origin || '',
       activity.condition || '',
       roleNames,
     ].join(' ').toLowerCase();
     return haystack.includes(query);
-  }, [activeSearch, activityCodeById, getActivityRoles, activeTab]);
+  }, [activeSearch, activityRefById, getActivityRoles, activeTab]);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -276,31 +285,30 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
-    const setupDatabase = async () => {
-      // Escuchar Rutas
-      const stageColPath = (colName) => getStageColPath(activeStage, colName);
-      const stageDefaultsData = stageDefaults[activeStage];
+    // Escuchar Rutas
+    const stageColPath = (colName) => getStageColPath(activeStage, colName);
+    const stageDefaultsData = stageDefaults[activeStage];
 
-      const unsubFlows = onSnapshot(collection(db, stageColPath('flows')), (snapshot) => {
+    const unsubFlows = onSnapshot(collection(db, stageColPath('flows')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
         if (data.length === 0 && !initializedRef.current[activeStage]) {
            data = stageDefaultsData.flows;
         }
         setFlows(data);
-      }, (error) => console.error(error));
+    }, (error) => console.error(error));
 
-      // Escuchar Fases
-      const unsubPhases = onSnapshot(collection(db, stageColPath('phases')), (snapshot) => {
+    // Escuchar Fases
+    const unsubPhases = onSnapshot(collection(db, stageColPath('phases')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
         data.sort((a, b) => a.title.localeCompare(b.title));
         if (data.length === 0 && !initializedRef.current[activeStage]) {
            data = stageDefaultsData.phases;
         }
         setPhases(data);
-      }, (error) => console.error(error));
+    }, (error) => console.error(error));
 
-      // Escuchar Actividades
-      const unsubActs = onSnapshot(collection(db, stageColPath('activities')), async (snapshot) => {
+    // Escuchar Actividades
+    const unsubActs = onSnapshot(collection(db, stageColPath('activities')), async (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
 
         if (data.length === 0 && !initializedRef.current[activeStage]) {
@@ -308,44 +316,75 @@ export default function App() {
            const batch = writeBatch(db);
            stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
            stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
-           stageDefaultsData.activities.forEach((a, index) => batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP }));
+           stageDefaultsData.activities.forEach((a, index) => batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP, activity_ref: formatActivityRef(index + 1) }));
            await batch.commit();
-           data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP }));
+           data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP, activity_ref: formatActivityRef(index + 1) }));
         }
 
-        const missingOrder = data.filter(activity => typeof activity.order_index !== 'number');
-        if (missingOrder.length > 0) {
-          const batch = writeBatch(db);
-          const phaseCatalog = data.length > 0
-            ? Array.from(new Set(data.map(activity => activity.phaseId))).map(id => ({ id }))
-            : stageDefaultsData.phases;
+        const hasMissingOrder = data.some(activity => typeof activity.order_index !== 'number');
+        const hasMissingRef = data.some(activity => !activity.activity_ref);
 
-          phaseCatalog.forEach(phase => {
-            const phaseActivities = data
-              .filter(activity => activity.phaseId === phase.id)
-              .sort((a, b) => a.id - b.id);
-            phaseActivities.forEach((activity, index) => {
-              if (typeof activity.order_index !== 'number') {
-                const order_index = (index + 1) * ORDER_GAP;
-                activity.order_index = order_index;
-                batch.set(doc(db, stageColPath('activities'), activity.id.toString()), { order_index }, { merge: true });
-              }
-            });
-          });
+        if (hasMissingOrder || hasMissingRef) {
+          const orderedById = [...data].sort((a, b) => a.id - b.id);
+
+          if (hasMissingOrder) {
+            const phaseIds = data.length > 0
+              ? Array.from(new Set(data.map(activity => activity.phaseId)))
+              : stageDefaultsData.phases.map(phase => phase.id);
+
+            for (const phaseId of phaseIds) {
+              const phaseActivities = data
+                .filter(activity => activity.phaseId === phaseId)
+                .sort((a, b) => a.id - b.id);
+
+              phaseActivities.forEach((activity, index) => {
+                if (typeof activity.order_index !== 'number') {
+                  activity.order_index = (index + 1) * ORDER_GAP;
+                }
+              });
+            }
+          }
+
+          let nextRefSequence = orderedById.reduce((max, activity) => {
+            const sequence = parseActivityRefSequence(activity.activity_ref);
+            return sequence && sequence > max ? sequence : max;
+          }, 0) + 1;
+
+          for (const activity of orderedById) {
+            if (!activity.activity_ref) {
+              activity.activity_ref = formatActivityRef(nextRefSequence);
+              nextRefSequence += 1;
+            }
+          }
+
+          const batch = writeBatch(db);
+          for (const activity of orderedById) {
+            const updatePayload = {};
+            if (typeof activity.order_index === 'number') updatePayload.order_index = activity.order_index;
+            if (activity.activity_ref) updatePayload.activity_ref = activity.activity_ref;
+            if (Object.keys(updatePayload).length > 0) {
+              batch.set(doc(db, stageColPath('activities'), activity.id.toString()), updatePayload, { merge: true });
+            }
+          }
+
           await batch.commit();
         }
 
         data = data.map(normalizeActivityModel);
         setActivities(data);
         setIsLoading(false);
-      }, (error) => console.error(error));
+    }, (error) => console.error(error));
 
-      return () => { unsubFlows(); unsubPhases(); unsubActs(); };
-    };
-
-    const cleanup = setupDatabase();
-    return () => cleanup;
+    return () => { unsubFlows(); unsubPhases(); unsubActs(); };
   }, [user, activeStage, normalizeActivityModel]);
+
+  const activityPredecessorOptions = useMemo(
+    () => sortedActivities.map((activity) => ({
+      id: activity.id,
+      label: `${activityRefById[activity.id] || `ACT-${String(activity.id).padStart(3, '0')}`} — ${activity.text || `Actividad ${activity.id}`}`,
+    })),
+    [activityRefById, sortedActivities]
+  );
 
 
   const getDownstreamPath = useCallback((startId, allActs = activities) => {
@@ -764,17 +803,26 @@ export default function App() {
       } else {
         newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
       }
+      const immutableRef = currentActivity?.activity_ref;
+      if (immutableRef) {
+        newActivity.activity_ref = immutableRef;
+      }
       await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
     } else {
       const phaseId = insertPhaseId || newActivity.phaseId;
       const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
       const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
       const docId = nextId.toString();
+      const maxRefSequence = activities.reduce((max, activity) => {
+        const sequence = parseActivityRefSequence(activity.activity_ref);
+        return sequence && sequence > max ? sequence : max;
+      }, 0);
       await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
         ...newActivity,
         id: nextId,
         phaseId,
         order_index,
+        activity_ref: formatActivityRef(maxRefSequence + 1),
       });
     }
 
@@ -807,12 +855,10 @@ export default function App() {
     const opacityClass = getOpacity(activity);
     if (opacityClass === 'hidden') return null;
     
-    const phaseObj = phases.find(p => p.id === activity.phaseId);
+    const phaseObj = phaseById[activity.phaseId];
     const phaseColor = getPhaseHexColor(phaseObj);
     const isDecision = activity.type === 'decision';
     const displayNumber = displayOrderByActivityId[activity.id] || 0;
-    const activityCode = activityCodeById[activity.id] || `ID-${activity.id}`;
-    const isSupport = getSupportRoleNames(activity).length > 0;
     const primaryRole = getPrimaryRoleName(activity) || 'Sin rol';
     const supportRoles = getSupportRoleNames(activity);
     
@@ -821,13 +867,13 @@ export default function App() {
         : `w-10 h-10 rounded-full border-2 border-white shadow-md text-white`;
         
     const customStyle = isDecision 
-        ? { backgroundColor: isSupport ? '#9ca3af99' : '#9ca3af', borderColor: '#6b7280' } 
-        : { backgroundColor: isSupport ? `${phaseColor}99` : phaseColor };
+        ? { backgroundColor: '#9ca3af', borderColor: '#6b7280' } 
+        : { backgroundColor: phaseColor };
         
     const contentRotate = isDecision ? '-rotate-45' : '';
 
     return (
-      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20, filter: isSupport ? 'saturate(0.7)' : 'none' }}>
+      <div ref={el => nodeRefs.current[activity.id] = el} className={`group relative flex items-center justify-center mb-8 transition-all duration-300 ${opacityClass}`} style={{ zIndex: isSelected ? 100 : 20 }}>
         <div 
             onClick={(e) => { e.stopPropagation(); setSelectedActivityId(isSelected ? null : activity.id); }}
             className={`flex items-center justify-center font-bold text-xs cursor-pointer transition-transform duration-200 hover:scale-110 active:scale-95 shadow-sm ${shapeClasses} ${isSelected ? 'ring-4 ring-offset-2 ring-blue-300' : ''}`}
@@ -835,11 +881,10 @@ export default function App() {
         >
             <span className={`${contentRotate}`}>{displayNumber}</span>
         </div>
-        <span className={`absolute top-full mt-1 text-[9px] font-black tracking-wide ${isSupport ? 'text-slate-400' : 'text-slate-500'}`}>{activityCode}</span>
         <div className={`absolute left-16 top-1/2 -translate-y-1/2 w-72 bg-white rounded-xl shadow-2xl border border-slate-100 transition-all duration-300 pointer-events-none origin-left z-[101] ${isSelected ? 'opacity-100 scale-100 translate-x-0' : 'opacity-0 scale-95 -translate-x-4 pointer-events-none'}`}>
             <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-white border-b-[6px] border-b-transparent drop-shadow-sm"></div>
             <div className="flex justify-between items-center p-3 border-b border-slate-50 bg-slate-50/50 rounded-t-xl">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{activityCode} · #{displayNumber}</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">#{displayNumber}</span>
                 <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase ring-1 ring-inset ring-white/60 ${roleBadges[primaryRole] || 'bg-slate-100'}`}>{primaryRole}</span>
             </div>
             <div className="p-4">
@@ -1076,7 +1121,7 @@ export default function App() {
                                                 {/* Header de la Tarjeta */}
                                                 <div className="flex justify-between items-start mb-3 pl-2">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`}</span>
+                                                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tracking-wider">{activityRefById[act.id] || `ACT-${String(act.id).padStart(3, '0')}`}</span>
                                                         <span className="text-[10px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-md tracking-wider">#{displayOrderByActivityId[act.id] || 0}</span>
                                                         <span className={`text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider ${roleBadges[getPrimaryRoleName(act)] || 'bg-slate-100 text-slate-600'}`}>
                                                             {getPrimaryRoleName(act) || 'Sin rol'}
@@ -1119,7 +1164,7 @@ export default function App() {
                                                         {act.predecessors && act.predecessors.length > 0 && (
                                                             <div className="flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
                                                                 <GitBranch className="w-3 h-3 text-slate-400" />
-                                                                <span>Dep: {act.predecessors.join(', ')}</span>
+                                                                <span>Dep: {(act.predecessors || []).map((predId) => activityRefById[predId] || `ACT-${String(predId).padStart(3, '0')}`).join(', ')}</span>
                                                             </div>
                                                         )}
                                                         {act.flows && act.flows.length > 0 && (
@@ -1240,7 +1285,7 @@ export default function App() {
                                   className={`relative p-3 rounded-lg border border-slate-200 hover:border-blue-400 cursor-pointer transition-all ${getSupportRoleNames(act).length > 0 ? 'bg-slate-50/80' : 'bg-white'} ${isEditingActivity === act.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-50' : ''} ${insertBeforeId === act.id ? 'ring-2 ring-emerald-300 border-emerald-400' : ''} ${draggedActivityId === act.id ? 'opacity-40' : ''}`}
                                 >
                                     <div className="pr-6">
-                                        <p className="text-[10px] font-black text-slate-500 tracking-wider">{activityCodeById[act.id] || `ID-${act.id}`} | #{displayOrderByActivityId[act.id] || 0}</p>
+                                        <p className="text-[10px] font-black text-slate-500 tracking-wider">{activityRefById[act.id] || `ACT-${String(act.id).padStart(3, '0')}`} | #{displayOrderByActivityId[act.id] || 0}</p>
                                         <p className="text-xs font-bold text-slate-700 truncate">{act.text}</p>
                                         <p className="text-[10px] text-slate-500 truncate"><span className="font-semibold">Primary:</span> {getPrimaryRoleName(act) || 'No definido'}</p>
                                         {getSupportRoleNames(act).length > 0 && (
@@ -1303,7 +1348,7 @@ export default function App() {
                </h2>
                {!isEditingActivity && insertBeforeId && (
                   <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-                    La nueva actividad se insertará en la fase {phases.find(p => p.id === insertPhaseId)?.title || 'seleccionada'} antes de {activityCodeById[insertBeforeId] || `ID-${insertBeforeId}`}.
+                    La nueva actividad se insertará en la fase {phaseById[insertPhaseId]?.title || 'seleccionada'} antes de {activityRefById[insertBeforeId] || `ACT-${String(insertBeforeId).padStart(3, '0')}`}.
                   </div>
                )}
                <div className="grid grid-cols-1 gap-5 max-w-2xl">
@@ -1356,9 +1401,9 @@ export default function App() {
                      <div>
                          <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Predecesores</label>
                          <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg bg-slate-50 p-2 space-y-1">
-                            {sortedActivities
-                              .filter(activity => activity.id !== isEditingActivity)
-                              .map(activity => {
+                            {activityPredecessorOptions
+                              .filter((activity) => activity.id !== isEditingActivity)
+                              .map((activity) => {
                                 const selected = (Array.isArray(formData.predecessors) ? formData.predecessors : []).includes(activity.id);
                                 return (
                                   <label key={activity.id} className={`flex items-center gap-2 text-xs p-1.5 rounded-md cursor-pointer ${selected ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-600 hover:bg-white'}`}>
@@ -1373,7 +1418,7 @@ export default function App() {
                                         setFormData({ ...formData, predecessors });
                                       }}
                                     />
-                                    <span>{activityCodeById[activity.id] || `ID-${activity.id}`}</span>
+                                    <span>{activity.label}</span>
                                   </label>
                                 );
                               })}
