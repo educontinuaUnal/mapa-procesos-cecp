@@ -223,6 +223,7 @@ export default function App() {
   const [isEditingActivity, setIsEditingActivity] = useState(null);
   const [managementMode, setManagementMode] = useState('activities');
   const [formData, setFormData] = useState(() => buildEmptyFormData(''));
+  const [formErrors, setFormErrors] = useState({});
   const [insertBeforeId, setInsertBeforeId] = useState(null);
   const [insertPhaseId, setInsertPhaseId] = useState(null);
   const [isDraggingNewActivity, setIsDraggingNewActivity] = useState(false);
@@ -356,6 +357,7 @@ export default function App() {
   const editingActivityOrder = isEditingActivity
     ? (displayOrderByActivityId[isEditingActivity] || isEditingActivity)
     : '';
+  const isFormValid = Boolean(formData.text.trim() && formData.role && formData.duration.trim());
 
   const matchesSearch = useCallback((activity) => {
     if (activeTab !== 'diagram_list') return true;
@@ -919,6 +921,7 @@ export default function App() {
     setDragDropTarget('none');
     setIsDraggingNewActivity(false);
     setDraggedActivityId(null);
+    setFormErrors({});
     setFormData(buildEmptyFormData(phases[0]?.id || ''));
   };
 
@@ -1057,8 +1060,27 @@ export default function App() {
     setIsDraggingNewActivity(false);
     setFormData(current => ({ ...current, phaseId }));
   };
+
+  const validateForm = () => {
+    const errors = {};
+    if (!formData.text.trim()) errors.text = 'El nombre es obligatorio.';
+    if (!formData.role) errors.role = 'El responsable es obligatorio.';
+    if (!formData.duration.trim()) errors.duration = 'La duración es obligatoria.';
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const clearFormError = (field) => {
+    setFormErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  };
   
   const handleSaveActivity = async () => {
+    if (!validateForm()) return;
     let preds = formData.predecessors;
     if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
 
@@ -1109,6 +1131,7 @@ export default function App() {
     setIsEditingActivity(activity.id);
     setInsertBeforeId(null);
     setInsertPhaseId(null);
+    setFormErrors({});
     const primaryRole = getPrimaryRoleName(activity);
     const supportRoles = getSupportRoleNames(activity);
     setFormData({ ...activity, role: primaryRole, support_roles: supportRoles, origin: activity.origin || '', condition: activity.condition || '', description: activity.description || '', flows: activity.flows || ['all'], predecessors: activity.predecessors || [] });
@@ -1722,11 +1745,16 @@ export default function App() {
                     <div className="mt-4">
                       <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Nombre</label>
                       <input
-                        className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                        className={`w-full p-2.5 border rounded-lg text-sm bg-white focus:ring-2 focus:outline-none ${formErrors.text ? 'border-red-300 focus:ring-red-200' : 'border-slate-200 focus:ring-blue-500'}`}
                         placeholder="Ej: Busqueda de posible docente"
                         value={formData.text}
-                        onChange={e=>setFormData({...formData, text: e.target.value})}
+                        onChange={e=>{
+                          const nextValue = e.target.value;
+                          setFormData({...formData, text: nextValue});
+                          if (nextValue.trim()) clearFormError('text');
+                        }}
                       />
+                      {formErrors.text && <p className="mt-1 text-[11px] text-red-600 font-semibold">{formErrors.text}</p>}
                     </div>
                     <div className="mt-4">
                       <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Descripcion</label>
@@ -1741,11 +1769,16 @@ export default function App() {
                       <div>
                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Duracion</label>
                         <input
-                          className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          className={`w-full p-2.5 border rounded-lg text-sm bg-white focus:ring-2 focus:outline-none ${formErrors.duration ? 'border-red-300 focus:ring-red-200' : 'border-slate-200 focus:ring-blue-500'}`}
                           placeholder="Ej: 3 dias"
                           value={formData.duration}
-                          onChange={e => setFormData({...formData, duration: e.target.value})}
+                          onChange={e => {
+                            const nextValue = e.target.value;
+                            setFormData({...formData, duration: nextValue});
+                            if (nextValue.trim()) clearFormError('duration');
+                          }}
                         />
+                        {formErrors.duration && <p className="mt-1 text-[11px] text-red-600 font-semibold">{formErrors.duration}</p>}
                       </div>
                       <div>
                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Condicion</label>
@@ -1773,10 +1806,15 @@ export default function App() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="md:col-span-1">
                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Rol Responsable</label>
-                        <select className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none" value={formData.role} onChange={e=>setFormData({...formData, role: e.target.value})}>
+                        <select className={`w-full p-2.5 border rounded-lg text-sm bg-slate-50 focus:ring-2 focus:outline-none ${formErrors.role ? 'border-red-300 focus:ring-red-200' : 'border-slate-200 focus:ring-blue-500'}`} value={formData.role} onChange={e=>{
+                          const nextValue = e.target.value;
+                          setFormData({...formData, role: nextValue});
+                          if (nextValue) clearFormError('role');
+                        }}>
                             <option value="">Seleccionar...</option>
                             {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
+                        {formErrors.role && <p className="mt-1 text-[11px] text-red-600 font-semibold">{formErrors.role}</p>}
                       </div>
                       <div className="md:col-span-2">
                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Roles de Soporte</label>
@@ -1844,9 +1882,20 @@ export default function App() {
                   </section>
 
                   <div className="flex gap-3 pt-2">
-                      <button onClick={handleSaveActivity} className="flex-1 bg-slate-900 text-white py-2.5 rounded-lg font-bold shadow-lg hover:bg-black transition-all transform active:scale-95 flex justify-center items-center gap-2"><Save className="w-4 h-4"/> Guardar Cambios</button>
+                      <button
+                        onClick={handleSaveActivity}
+                        disabled={!isFormValid}
+                        className={`flex-1 py-2.5 rounded-lg font-bold shadow-lg transition-all transform flex justify-center items-center gap-2 ${isFormValid ? 'bg-slate-900 text-white hover:bg-black active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
+                      >
+                        <Save className="w-4 h-4"/> Guardar Cambios
+                      </button>
                       {(isEditingActivity || insertBeforeId) && (<button onClick={resetForm} className="px-6 py-2.5 border border-slate-200 rounded-lg text-slate-600 font-bold hover:bg-slate-50 transition-all">Cancelar</button>)}
                   </div>
+                  {!isFormValid && (
+                    <p className="text-[11px] text-slate-500">
+                      Completa nombre, responsable y duracion para guardar.
+                    </p>
+                  )}
                </div>
             </div>
           </div>
