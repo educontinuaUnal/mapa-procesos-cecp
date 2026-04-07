@@ -1,0 +1,147 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdminUser() {
+      return isSignedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.uid in [
+          // Reemplaza estos valores por UIDs reales de administradores.
+          "Hd0fliPDxIR0NDL2BYZqjFtTok53"
+        ]
+      );
+    }
+
+    function isValidStageId(stageId) {
+      return stageId in ["formulacion", "ejecucion", "liquidacion"];
+    }
+
+    function isHexColor(value) {
+      return value is string && value.matches("^#[0-9a-fA-F]{6}$");
+    }
+
+    function isSafeText(value, maxLen) {
+      return value is string && value.size() > 0 && value.size() <= maxLen;
+    }
+
+    function isBoundedText(value, maxLen) {
+      return value is string && value.size() <= maxLen;
+    }
+
+    function isValidRoleDoc(data, roleId) {
+      return data.keys().hasOnly(["id", "name", "color", "textColor"]) &&
+        data.keys().hasAll(["id", "name", "color", "textColor"]) &&
+        data.id == roleId &&
+        isSafeText(data.name, 60) &&
+        isHexColor(data.color) &&
+        isHexColor(data.textColor);
+    }
+
+    function isValidPhaseDoc(data, phaseId) {
+      return data.keys().hasOnly(["id", "title", "color"]) &&
+        data.keys().hasAll(["id", "title", "color"]) &&
+        data.id == phaseId &&
+        isSafeText(data.title, 120) &&
+        isHexColor(data.color);
+    }
+
+    function isValidFlowDoc(data, flowId) {
+      return data.keys().hasOnly(["id", "label", "color"]) &&
+        data.keys().hasAll(["id", "label", "color"]) &&
+        data.id == flowId &&
+        isSafeText(data.label, 120) &&
+        isHexColor(data.color);
+    }
+
+    function isValidActivityDoc(data) {
+      return data.keys().hasOnly([
+          "id",
+          "phaseId",
+          "text",
+          "description",
+          "role",
+          "support_roles",
+          "duration",
+          "type",
+          "predecessors",
+          "flows",
+          "origin",
+          "condition",
+          "activity_roles",
+          "order_index",
+          "activity_ref"
+        ]) &&
+        data.keys().hasAll([
+          "id",
+          "phaseId",
+          "text",
+          "role",
+          "duration",
+          "type",
+          "predecessors",
+          "flows",
+          "order_index",
+          "activity_ref"
+        ]) &&
+        data.id is int &&
+        data.phaseId is string &&
+        data.phaseId.size() > 0 &&
+        data.phaseId.size() <= 80 &&
+        isSafeText(data.text, 400) &&
+        isBoundedText(data.role, 60) &&
+        isBoundedText(data.duration, 80) &&
+        data.type in ["start", "process", "decision"] &&
+        data.predecessors is list &&
+        data.predecessors.size() <= 200 &&
+        data.flows is list &&
+        data.flows.size() > 0 &&
+        data.flows.size() <= 30 &&
+        data.order_index is number &&
+        data.activity_ref is string &&
+        data.activity_ref.matches("^ACT-[0-9]{3,}$") &&
+        (!("description" in data) || isBoundedText(data.description, 1200)) &&
+        (!("origin" in data) || isBoundedText(data.origin, 120)) &&
+        (!("condition" in data) || isBoundedText(data.condition, 160)) &&
+        (!("support_roles" in data) || (data.support_roles is list && data.support_roles.size() <= 30)) &&
+        (!("activity_roles" in data) || (data.activity_roles is list && data.activity_roles.size() <= 30));
+    }
+
+    match /artifacts/mapa-cecp-app/public/data/roles/{roleId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdminUser() && isValidRoleDoc(request.resource.data, roleId);
+      allow delete: if isAdminUser();
+    }
+
+    match /artifacts/mapa-cecp-app/public/data/stages/{stageId}/phases/{phaseId} {
+      allow read: if isSignedIn() && isValidStageId(stageId);
+      allow create, update: if isAdminUser() &&
+        isValidStageId(stageId) &&
+        isValidPhaseDoc(request.resource.data, phaseId);
+      allow delete: if isAdminUser() && isValidStageId(stageId);
+    }
+
+    match /artifacts/mapa-cecp-app/public/data/stages/{stageId}/flows/{flowId} {
+      allow read: if isSignedIn() && isValidStageId(stageId);
+      allow create, update: if isAdminUser() &&
+        isValidStageId(stageId) &&
+        isValidFlowDoc(request.resource.data, flowId);
+      allow delete: if isAdminUser() && isValidStageId(stageId);
+    }
+
+    match /artifacts/mapa-cecp-app/public/data/stages/{stageId}/activities/{activityId} {
+      allow read: if isSignedIn() && isValidStageId(stageId);
+      allow create, update: if isAdminUser() &&
+        isValidStageId(stageId) &&
+        activityId.matches("^[0-9]+$") &&
+        isValidActivityDoc(request.resource.data);
+      allow delete: if isAdminUser() && isValidStageId(stageId);
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

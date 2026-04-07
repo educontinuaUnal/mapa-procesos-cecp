@@ -141,7 +141,7 @@ const rolePalette = [
   { color: '#f1f5f9', textColor: '#334155' },
 ];
 
-const ADMIN_PASSWORD = "admin123";
+const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || "";
 
 const getReadableTextColor = (hexColor) => {
   if (!hexColor || !hexColor.startsWith('#')) return '#334155';
@@ -658,6 +658,10 @@ export default function App() {
 
   const handleLogin = (e) => {
       e.preventDefault();
+      if (!ADMIN_PASSWORD) {
+          setAuthError('Acceso admin no configurado. Define VITE_ADMIN_PASSWORD en tu entorno.');
+          return;
+      }
       if (passwordInput === ADMIN_PASSWORD) {
           setIsAuthenticated(true);
           setShowAuthModal(false);
@@ -786,7 +790,7 @@ export default function App() {
       chunk.forEach(({ stageId, activityId, data }) => {
         batch.set(doc(db, getStageColPath(stageId, 'activities'), activityId), data, { merge: true });
       });
-      await batch.acommit();
+      await batch.commit();
     }
   };
 
