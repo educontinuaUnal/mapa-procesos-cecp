@@ -10,7 +10,8 @@ service cloud.firestore {
         request.auth.token.admin == true ||
         request.auth.uid in [
           // Reemplaza estos valores por UIDs reales de administradores.
-          "Hd0fliPDxIR0NDL2BYZqjFtTok53"
+          "Hd0fliPDxIR0NDL2BYZqjFtTok53",
+          "3VTYUmCkqNU3g2U8qvDdUzChuK13"
         ]
       );
     }
