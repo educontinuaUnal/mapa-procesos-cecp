@@ -6,7 +6,7 @@ import {
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from "firebase/app";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInAnonymously, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "firebase/auth";
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch, getDocs } from "firebase/firestore";
 
 // --- CONFIGURACIÓN DE FIREBASE ---
@@ -141,7 +141,13 @@ const rolePalette = [
   { color: '#f1f5f9', textColor: '#334155' },
 ];
 
-const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || "";
+const ADMIN_UID = import.meta.env.VITE_ADMIN_UID || "Hd0fliPDxIR0NDL2BYZqjFtTok53";
+const ADMIN_EMAIL = (import.meta.env.VITE_ADMIN_EMAIL || "platafcecp_med@unal.edu.co").toLowerCase();
+const isAdminSessionUser = (currentUser) => {
+  if (!currentUser) return false;
+  const email = (currentUser.email || '').toLowerCase();
+  return currentUser.uid === ADMIN_UID || (Boolean(ADMIN_EMAIL) && email === ADMIN_EMAIL);
+};
 
 const getReadableTextColor = (hexColor) => {
   if (!hexColor || !hexColor.startsWith('#')) return '#334155';
@@ -215,7 +221,8 @@ export default function App() {
   // Estados de Seguridad
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
+  const [loginEmail, setLoginEmail] = useState(ADMIN_EMAIL || '');
+  const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
   // Estados de Interfaz
@@ -430,20 +437,20 @@ export default function App() {
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
-    const initAuth = async () => {
-      try { 
-        await signInAnonymously(auth); 
-      } catch (error) { 
-        console.error("Error conectando a Firebase:", error); 
-        // Fallback para evitar bloqueo si la Autenticación Anónima no está habilitada
-        setUser({ uid: 'usuario-temporal-test' });
-      }
-    };
-    initAuth();
-
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
+        setIsAuthenticated(isAdminSessionUser(currentUser));
+        return;
+      }
+
+      setIsAuthenticated(false);
+      try {
+        await signInAnonymously(auth);
+      } catch (error) {
+        console.error("Error conectando a Firebase:", error);
+        // Fallback para evitar bloqueo si la Autenticación Anónima no está habilitada
+        setUser({ uid: 'usuario-temporal-test' });
       }
     });
     return () => unsubscribe();
@@ -711,22 +718,48 @@ export default function App() {
 
   // --- NAVEGACIÓN Y SEGURIDAD ---
   const handleEditorTabClick = () => {
-      if (isAuthenticated) { setActiveTab('editor'); } else { setShowAuthModal(true); }
+      if (isAuthenticated) {
+        setActiveTab('editor');
+        return;
+      }
+      setAuthError('');
+      setLoginPassword('');
+      setShowAuthModal(true);
   };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
       e.preventDefault();
-      if (!ADMIN_PASSWORD) {
-          setAuthError('Acceso admin no configurado. Define VITE_ADMIN_PASSWORD en tu entorno.');
-          return;
+      const email = loginEmail.trim().toLowerCase();
+      if (!email || !loginPassword.trim()) {
+        setAuthError('Ingresa correo y contraseña.');
+        return;
       }
-      if (passwordInput === ADMIN_PASSWORD) {
-          setIsAuthenticated(true);
-          setShowAuthModal(false);
-          setAuthError('');
-          setPasswordInput('');
-          setActiveTab('editor');
-      } else { setAuthError('Contraseña incorrecta'); }
+
+      try {
+        const credentials = await signInWithEmailAndPassword(auth, email, loginPassword);
+        const sessionUser = credentials.user;
+        if (!isAdminSessionUser(sessionUser)) {
+          await signOut(auth);
+          setAuthError(`El usuario ${email} no tiene permisos de editor.`);
+          return;
+        }
+        setIsAuthenticated(true);
+        setShowAuthModal(false);
+        setAuthError('');
+        setLoginPassword('');
+        setActiveTab('editor');
+      } catch (error) {
+        console.error(error);
+        if (error?.code === 'auth/invalid-credential' || error?.code === 'auth/wrong-password' || error?.code === 'auth/user-not-found') {
+          setAuthError('Correo o contraseña incorrectos.');
+          return;
+        }
+        if (error?.code === 'auth/too-many-requests') {
+          setAuthError('Demasiados intentos. Espera un momento y vuelve a intentar.');
+          return;
+        }
+        setAuthError(`No se pudo iniciar sesión. ${error?.message || 'Error inesperado.'}`);
+      }
   };
 
   const handleStageChange = (stageId) => {
@@ -1330,20 +1363,26 @@ export default function App() {
                       </div>
                   </div>
                   <h2 className="text-xl font-bold text-center text-slate-800 mb-2">Acceso Restringido</h2>
-                  <p className="text-sm text-center text-slate-500 mb-6">Ingresa la contraseña para acceder al editor.</p>
+                  <p className="text-sm text-center text-slate-500 mb-4">Inicia sesión con tu correo institucional para acceder al editor.</p>
+                  <p className="text-[11px] text-center text-slate-400 mb-6">Solo usuarios admin (UID autorizado) pueden editar.</p>
                   
                   <form onSubmit={handleLogin} className="space-y-4">
                       <div>
+                          <input
+                              type="email" autoFocus placeholder="Correo"
+                              className={`w-full p-3 border rounded-lg focus:ring-2 focus:outline-none transition-all mb-3 ${authError ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+                              value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)}
+                          />
                           <input 
-                              type="password" autoFocus placeholder="Contraseña"
+                              type="password" placeholder="Contraseña"
                               className={`w-full p-3 border rounded-lg focus:ring-2 focus:outline-none transition-all ${authError ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-                              value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)}
+                              value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)}
                           />
                           {authError && <p className="text-xs text-red-500 mt-1 font-medium">{authError}</p>}
                       </div>
                       <div className="flex gap-3">
-                          <button type="button" onClick={() => { setShowAuthModal(false); setAuthError(''); setPasswordInput(''); }} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-lg font-bold hover:bg-slate-200">Cancelar</button>
-                          <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-bold shadow-lg hover:bg-blue-700 flex justify-center items-center gap-2"><Unlock className="w-4 h-4"/> Entrar</button>
+                          <button type="button" onClick={() => { setShowAuthModal(false); setAuthError(''); setLoginPassword(''); }} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-lg font-bold hover:bg-slate-200">Cancelar</button>
+                          <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-bold shadow-lg hover:bg-blue-700 flex justify-center items-center gap-2"><Unlock className="w-4 h-4"/> Iniciar sesión</button>
                       </div>
                   </form>
               </div>

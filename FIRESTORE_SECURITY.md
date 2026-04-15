@@ -40,15 +40,15 @@ Ya dejamos `firebase-tools` instalado como dependencia local del proyecto.
 Nota: los scripts ya están preparados para evitar el error de permisos de `~/.config`.
 
 ## 5) Nota importante sobre tu app actual
-Actualmente el frontend usa `signInAnonymously()` y una contraseña local de interfaz (`VITE_ADMIN_PASSWORD`) que no protege Firestore.
-Con reglas sólidas:
-- lo ideal es mantener lectura con anónimo/autenticado;
-- para edición, migrar a login real (Google/Email) y asignar `custom claim admin`.
+El editor ahora usa inicio de sesion real (`Email/Password`) y valida que el usuario autenticado sea admin por UID/correo.
+Variables disponibles para el frontend:
+- `VITE_ADMIN_UID`
+- `VITE_ADMIN_EMAIL`
 
-Si quieres conservar el candado visual del editor:
-1. Crea `.env.local` desde el ejemplo:
+Si quieres ajustar el usuario admin del editor:
+1. Crea o actualiza `.env.local` desde el ejemplo:
    - `cp .env.example .env.local`
-2. Define una contraseña fuerte en `VITE_ADMIN_PASSWORD`.
+2. Define `VITE_ADMIN_UID` y `VITE_ADMIN_EMAIL` con tu cuenta admin.
 
 ## 6) Verificación rápida
 Después del deploy:
