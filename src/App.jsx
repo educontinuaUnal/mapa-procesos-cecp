@@ -163,6 +163,21 @@ const getPhaseHexColor = (phase) => {
     return matched ? oldColors[matched] : '#3b82f6';
 };
 
+const getPhaseOrderValue = (phase) => {
+  if (typeof phase?.order_index === 'number') return phase.order_index;
+  const match = `${phase?.id || ''}`.match(/\d+/);
+  return match ? parseInt(match[0], 10) : Number.MAX_SAFE_INTEGER;
+};
+
+const DEFAULT_CONFIRM_DIALOG = {
+  isOpen: false,
+  title: '',
+  message: '',
+  onConfirm: null,
+  confirmLabel: 'Confirmar',
+  confirmTone: 'danger',
+};
+
 const buildEmptyFormData = (phaseId = '') => ({
   text: '',
   description: '',
@@ -204,7 +219,8 @@ export default function App() {
   const [authError, setAuthError] = useState('');
 
   // Estados de Interfaz
-  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
+  const [confirmDialog, setConfirmDialog] = useState(DEFAULT_CONFIRM_DIALOG);
+  const [statusNotice, setStatusNotice] = useState({ type: '', message: '' });
   const [tempFilters, setTempFilters] = useState({ flow: 'all', role: 'all' });
   const [activeFilters, setActiveFilters] = useState({ flow: 'all', role: 'all' });
   const [tempSearch, setTempSearch] = useState('');
@@ -218,6 +234,7 @@ export default function App() {
   const initializedRef = useRef({});
   const rolesInitializedRef = useRef(false);
   const nextActivityRefCounter = useRef(1);
+  const noticeTimeoutRef = useRef(null);
 
   // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
@@ -325,6 +342,10 @@ export default function App() {
     nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxActivityRefNumber + 1);
   }, [maxActivityRefNumber]);
 
+  useEffect(() => () => {
+    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
+  }, []);
+
   const activitiesById = useMemo(
     () => Object.fromEntries(activities.map(activity => [activity.id, activity])),
     [activities]
@@ -358,6 +379,38 @@ export default function App() {
     ? (displayOrderByActivityId[isEditingActivity] || isEditingActivity)
     : '';
   const isFormValid = Boolean(formData.text.trim() && formData.role && formData.duration.trim());
+
+  const clearNotice = () => {
+    if (noticeTimeoutRef.current) {
+      clearTimeout(noticeTimeoutRef.current);
+      noticeTimeoutRef.current = null;
+    }
+    setStatusNotice({ type: '', message: '' });
+  };
+
+  const showNotice = (type, message, timeoutMs = 6500) => {
+    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
+    setStatusNotice({ type, message });
+    if (timeoutMs > 0) {
+      noticeTimeoutRef.current = setTimeout(() => {
+        setStatusNotice({ type: '', message: '' });
+        noticeTimeoutRef.current = null;
+      }, timeoutMs);
+    }
+  };
+
+  const handleWriteError = (error, actionLabel = 'guardar cambios') => {
+    console.error(error);
+    const currentUid = auth.currentUser?.uid || user?.uid || 'sin UID';
+    if (error?.code === 'permission-denied') {
+      showNotice(
+        'error',
+        `Firestore rechazo la accion de ${actionLabel}. El usuario actual (${currentUid}) no tiene permisos de admin en las reglas.`
+      );
+      return;
+    }
+    showNotice('error', `No se pudo ${actionLabel}. ${error?.message || 'Error inesperado.'}`);
+  };
 
   const matchesSearch = useCallback((activity) => {
     if (activeTab !== 'diagram_list') return true;
@@ -454,7 +507,12 @@ export default function App() {
 
       unsubPhases = onSnapshot(collection(db, stageColPath('phases')), (snapshot) => {
         let data = snapshot.docs.map(doc => doc.data());
-        data.sort((a, b) => a.title.localeCompare(b.title));
+        data.sort((a, b) => {
+          const orderA = getPhaseOrderValue(a);
+          const orderB = getPhaseOrderValue(b);
+          if (orderA !== orderB) return orderA - orderB;
+          return (a.title || '').localeCompare(b.title || '');
+        });
         if (data.length === 0 && !initializedRef.current[activeStage]) {
           data = stageDefaultsData.phases;
         }
@@ -699,6 +757,8 @@ export default function App() {
           isOpen: true,
           title: 'Eliminar Actividad',
           message: `¿Estás seguro de que deseas eliminar la actividad #${id}?`,
+          confirmLabel: 'Si, eliminar',
+          confirmTone: 'danger',
           onConfirm: async () => {
               // 1. Borrar actividad principal
               await deleteDoc(doc(db, getStageColPath(activeStage, 'activities'), id.toString()));
@@ -714,7 +774,7 @@ export default function App() {
               await batch.commit();
               
               if (isEditingActivity === id) setIsEditingActivity(null);
-              setConfirmDialog({ isOpen: false });
+              setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
           }
       });
   };
@@ -724,6 +784,8 @@ export default function App() {
           isOpen: true,
           title: 'Eliminar Fase Completa',
           message: '¡Atención! Al borrar esta fase, también se eliminarán TODAS las actividades que pertenecen a ella.',
+          confirmLabel: 'Si, eliminar',
+          confirmTone: 'danger',
           onConfirm: async () => {
               const batch = writeBatch(db);
               batch.delete(doc(db, getStageColPath(activeStage, 'phases'), id));
@@ -731,7 +793,7 @@ export default function App() {
                   if (a.phaseId === id) batch.delete(doc(db, getStageColPath(activeStage, 'activities'), a.id.toString()));
               });
               await batch.commit();
-              setConfirmDialog({ isOpen: false });
+              setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
           }
       });
   };
@@ -741,6 +803,8 @@ export default function App() {
           isOpen: true,
           title: 'Eliminar Ruta',
           message: '¿Borrar esta ruta? Las actividades seguirán existiendo, pero perderán su asignación a este flujo.',
+          confirmLabel: 'Si, eliminar',
+          confirmTone: 'danger',
           onConfirm: async () => {
               const batch = writeBatch(db);
               batch.delete(doc(db, getStageColPath(activeStage, 'flows'), id));
@@ -751,7 +815,7 @@ export default function App() {
                   }
               });
               await batch.commit();
-              setConfirmDialog({ isOpen: false });
+              setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
           }
       });
   };
@@ -910,10 +974,12 @@ export default function App() {
       isOpen: true,
       title: 'Eliminar Rol',
       message: `¿Eliminar el rol "${role.name}"? Se eliminará de todas las actividades.`,
+      confirmLabel: 'Si, eliminar',
+      confirmTone: 'danger',
       onConfirm: async () => {
         await deleteDoc(doc(db, getRolesColPath(), role.id));
         await removeRoleAcrossStages(role.name);
-        setConfirmDialog({ isOpen: false });
+        setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
       }
     });
   };
@@ -1015,16 +1081,20 @@ export default function App() {
     if (!movingActivity) return;
     if (targetBeforeId === activityId) return;
 
-    const nextOrderIndex = await calculateOrderIndex(targetPhaseId, targetBeforeId, activityId);
-    await setDoc(
-      doc(db, getStageColPath(activeStage, 'activities'), activityId.toString()),
-      { phaseId: targetPhaseId, order_index: nextOrderIndex },
-      { merge: true }
-    );
+    try {
+      const nextOrderIndex = await calculateOrderIndex(targetPhaseId, targetBeforeId, activityId);
+      await setDoc(
+        doc(db, getStageColPath(activeStage, 'activities'), activityId.toString()),
+        { phaseId: targetPhaseId, order_index: nextOrderIndex },
+        { merge: true }
+      );
 
-    if (keepSelection) {
-      setIsEditingActivity(activityId);
-      setSelectedActivityId(activityId);
+      if (keepSelection) {
+        setIsEditingActivity(activityId);
+        setSelectedActivityId(activityId);
+      }
+    } catch (error) {
+      handleWriteError(error, 'reordenar la actividad');
     }
   };
 
@@ -1085,50 +1155,79 @@ export default function App() {
   
   const handleSaveActivity = async () => {
     if (!validateForm()) return;
-    let preds = formData.predecessors;
-    if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
+    const persistActivity = async () => {
+      let preds = formData.predecessors;
+      if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
 
-    const primaryRole = formData.role || '';
-    const supportRoles = (formData.support_roles || []).filter(role => role && role !== primaryRole);
-    const activity_roles = [
-      ...(primaryRole ? [{ id: `ar-primary-${Date.now()}`, role_name: primaryRole, role_type: 'PRIMARY' }] : []),
-      ...supportRoles.map((roleName, idx) => ({ id: `ar-support-${Date.now()}-${idx}`, role_name: roleName, role_type: 'SUPPORT' })),
-    ];
+      const primaryRole = formData.role || '';
+      const supportRoles = (formData.support_roles || []).filter(role => role && role !== primaryRole);
+      const activity_roles = [
+        ...(primaryRole ? [{ id: `ar-primary-${Date.now()}`, role_name: primaryRole, role_type: 'PRIMARY' }] : []),
+        ...supportRoles.map((roleName, idx) => ({ id: `ar-support-${Date.now()}-${idx}`, role_name: roleName, role_type: 'SUPPORT' })),
+      ];
 
-    const newActivity = {
-      ...formData,
-      role: primaryRole,
-      activity_roles,
-      predecessors: preds,
+      const newActivity = {
+        ...formData,
+        role: primaryRole,
+        activity_roles,
+        predecessors: preds,
+      };
+
+      if (isEditingActivity) {
+        const docId = isEditingActivity.toString();
+        const currentActivity = activities.find(activity => activity.id === isEditingActivity);
+        newActivity.id = parseInt(docId);
+        newActivity.activity_ref = currentActivity?.activity_ref || newActivity.activity_ref;
+        if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
+          newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
+        } else {
+          newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
+        }
+        await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
+      } else {
+        const phaseId = insertPhaseId || newActivity.phaseId;
+        const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
+        const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
+        const docId = nextId.toString();
+        await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
+          ...newActivity,
+          id: nextId,
+          phaseId,
+          order_index,
+          activity_ref: formatActivityRef(nextActivityRefCounter.current),
+        });
+        nextActivityRefCounter.current += 1;
+      }
+
+      resetForm();
+      showNotice('success', isEditingActivity ? 'Cambios guardados correctamente.' : 'Actividad creada correctamente.');
     };
 
     if (isEditingActivity) {
-      const docId = isEditingActivity.toString();
-      const currentActivity = activities.find(activity => activity.id === isEditingActivity);
-      newActivity.id = parseInt(docId);
-      newActivity.activity_ref = currentActivity?.activity_ref || newActivity.activity_ref;
-      if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
-        newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
-      } else {
-        newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
-      }
-      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
-    } else {
-      const phaseId = insertPhaseId || newActivity.phaseId;
-      const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
-      const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
-      const docId = nextId.toString();
-      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
-        ...newActivity,
-        id: nextId,
-        phaseId,
-        order_index,
-        activity_ref: formatActivityRef(nextActivityRefCounter.current),
+      setConfirmDialog({
+        isOpen: true,
+        title: 'Guardar cambios',
+        message: '¿Deseas guardar la modificacion de esta actividad?',
+        confirmLabel: 'Si, guardar',
+        confirmTone: 'primary',
+        onConfirm: async () => {
+          try {
+            await persistActivity();
+          } catch (error) {
+            handleWriteError(error, 'guardar la actividad');
+          } finally {
+            setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
+          }
+        },
       });
-      nextActivityRefCounter.current += 1;
+      return;
     }
 
-    resetForm();
+    try {
+      await persistActivity();
+    } catch (error) {
+      handleWriteError(error, 'crear la actividad');
+    }
   };
 
   const startEdit = (activity) => {
@@ -1263,8 +1362,13 @@ export default function App() {
                   </div>
                   <p className="text-sm text-slate-600 mb-6">{confirmDialog.message}</p>
                   <div className="flex justify-end gap-3">
-                      <button onClick={() => setConfirmDialog({ isOpen: false })} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200">Cancelar</button>
-                      <button onClick={confirmDialog.onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold shadow-lg hover:bg-red-700">Sí, eliminar</button>
+                      <button onClick={() => setConfirmDialog(DEFAULT_CONFIRM_DIALOG)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200">Cancelar</button>
+                      <button
+                        onClick={confirmDialog.onConfirm}
+                        className={`px-4 py-2 text-white rounded-lg font-bold shadow-lg ${confirmDialog.confirmTone === 'primary' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-red-600 hover:bg-red-700'}`}
+                      >
+                        {confirmDialog.confirmLabel || 'Confirmar'}
+                      </button>
                   </div>
               </div>
           </div>
@@ -1357,6 +1461,14 @@ export default function App() {
 
       {/* MAIN */}
       <main className="flex-1 overflow-hidden relative flex bg-slate-50">
+        {statusNotice.message && (
+          <div className={`absolute top-3 left-3 right-3 z-[120] border rounded-xl px-4 py-3 text-sm font-medium shadow ${statusNotice.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+            <div className="flex items-start justify-between gap-4">
+              <span>{statusNotice.message}</span>
+              <button onClick={clearNotice} className="text-xs px-2 py-1 rounded-md border border-current/30 hover:bg-white/50">Cerrar</button>
+            </div>
+          </div>
+        )}
         
         {/* DIAGRAMA NODOS */}
         {activeTab === 'diagram_node' && (
