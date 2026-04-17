@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { 
   Layout, Plus, Trash2, Edit2, Save, Network, Clock, Filter, 
-  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch, ChevronUp, ChevronDown
+  CornerDownRight, RotateCcw, Users, AlertTriangle, Lock, Unlock, CheckCircle2, GitBranch, ChevronUp, ChevronDown, Info
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -41,94 +41,6 @@ const processStages = [
   { id: 'liquidacion', title: 'Liquidación', description: 'Cierre técnico, financiero y lecciones', color: 'from-fuchsia-600 to-rose-600' },
 ];
 
-// --- DATA INICIAL POR ETAPA (Por si la base de datos está vacía) ---
-const stageDefaults = {
-  formulacion: {
-    flows: [
-      { id: 'oferta_abierta', label: 'Oferta Abierta', color: '#3b82f6' },
-      { id: 'proyectos', label: 'Proyectos y Licitaciones', color: '#8b5cf6' },
-    ],
-    phases: [
-      { id: 'p1', title: '1. Búsqueda', color: '#3b82f6' },
-      { id: 'p2', title: '2. Viabilidad', color: '#6366f1' },
-      { id: 'p3', title: '3. Propuestas', color: '#a855f7' },
-      { id: 'p4', title: '4. Validación', color: '#d946ef' },
-      { id: 'p5', title: '5. Ejecución', color: '#ec4899' },
-      { id: 'p6', title: '6. Gestión', color: '#f43f5e' }
-    ],
-    activities: [
-      { id: 1, phaseId: 'p1', text: 'Seguimiento de tendencias en reportes', role: 'GT', duration: 'Permanente', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Tendencias', condition: '' },
-      { id: 2, phaseId: 'p1', text: 'Recepción de iniciativas individuales', role: 'GOA', duration: 'N/A', type: 'start', predecessors: [], flows: ['oferta_abierta'], origin: 'Iniciativas', condition: '' },
-      { id: 3, phaseId: 'p1', text: 'Rastreo en plataformas (SECOP, Hermes)', role: 'GOM', duration: 'Diario', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Plataformas', condition: '' },
-      { id: 4, phaseId: 'p1', text: 'Reunión con empresa/entidad', role: 'GOM', duration: 'N/A', type: 'start', predecessors: [], flows: ['proyectos'], origin: 'Institucional', condition: '' },
-      { id: 5, phaseId: 'p1', text: 'Participación en Ferias/Eventos', role: 'GT', duration: 'Eventual', type: 'start', predecessors: [], flows: ['proyectos', 'oferta_abierta'], origin: 'Eventos', condition: '' },
-      { id: 6, phaseId: 'p2', text: 'Estudio de mercado y tendencias', role: 'GT', duration: '3 días', type: 'process', predecessors: [1, 2, 5], flows: ['oferta_abierta'], condition: '' },
-      { id: 7, phaseId: 'p2', text: 'Revisión Financiera Inicial', role: 'GA', duration: '2 días', type: 'process', predecessors: [2], flows: ['oferta_abierta'], condition: '' },
-      { id: 8, phaseId: 'p2', text: 'Revisión de pliegos de condiciones', role: 'GOM', duration: '1 día', type: 'decision', predecessors: [3, 4], flows: ['proyectos'], condition: '' },
-      { id: 9, phaseId: 'p3', text: 'Búsqueda de posible docente', role: 'GA', duration: 'Varía', type: 'process', predecessors: [6], flows: ['oferta_abierta'], condition: 'Si es viable' },
-      { id: 10, phaseId: 'p3', text: 'Creación ficha extensión', role: 'D', duration: '2 días', type: 'process', predecessors: [7, 9], flows: ['oferta_abierta'], condition: '' },
-      { id: 11, phaseId: 'p3', text: 'Manifestación de interés (Hermes)', role: 'GOM', duration: '1 día', type: 'process', predecessors: [8], flows: ['proyectos'], condition: 'Si cumple pliegos' },
-      { id: 12, phaseId: 'p3', text: 'Construcción propuesta técnica/económica', role: 'GOM', duration: '3-5 días', type: 'process', predecessors: [11], flows: ['proyectos'], condition: 'Si hay aval' },
-      { id: 13, phaseId: 'p4', text: 'Aprobación Comité de Extensión', role: 'DC', duration: 'Semanal', type: 'process', predecessors: [10], flows: ['oferta_abierta'], condition: '' },
-      { id: 14, phaseId: 'p4', text: 'Elaboración de Acuerdo/Contrato', role: 'GOM', duration: '5 días', type: 'process', predecessors: [12], flows: ['proyectos'], condition: 'Si ganamos licitación' },
-      { id: 15, phaseId: 'p5', text: 'Decisión: ¿Existe Proyecto en SAP?', role: 'Sistema', duration: 'N/A', type: 'decision', predecessors: [13, 14], flows: ['all'], condition: '' },
-      { id: 16, phaseId: 'p5', text: 'Creación de PAC y Resolución', role: 'GA', duration: '5 días', type: 'process', predecessors: [15], flows: ['all'], condition: 'NO existe' },
-      { id: 17, phaseId: 'p5', text: 'Formulación de Subproyectos', role: 'GP', duration: '3 días', type: 'process', predecessors: [15, 16], flows: ['all'], condition: 'SI existe / Ya creado' },
-      { id: 18, phaseId: 'p6', text: 'Campaña de expectativa', role: 'GT', duration: '15 días', type: 'process', predecessors: [17], flows: ['oferta_abierta'], condition: '' },
-      { id: 19, phaseId: 'p6', text: 'Ejecución del Proyecto (Inicio)', role: 'Director', duration: 'N/A', type: 'process', predecessors: [17], flows: ['proyectos'], condition: '' },
-    ],
-  },
-  ejecucion: {
-    flows: [
-      { id: 'academica', label: 'Ejecución Académica', color: '#0ea5e9' },
-      { id: 'administrativa', label: 'Ejecución Administrativa', color: '#14b8a6' },
-    ],
-    phases: [
-      { id: 'e1', title: '1. Alistamiento', color: '#0ea5e9' },
-      { id: 'e2', title: '2. Operación', color: '#14b8a6' },
-      { id: 'e3', title: '3. Control', color: '#22c55e' },
-      { id: 'e4', title: '4. Cierre Operativo', color: '#10b981' },
-    ],
-    activities: [
-      { id: 1, phaseId: 'e1', text: 'Reunión de inicio y plan de trabajo', role: 'Director', duration: '1 día', type: 'start', predecessors: [], flows: ['all'], origin: '', condition: '' },
-      { id: 2, phaseId: 'e1', text: 'Asignación de equipo y recursos', role: 'GA', duration: '2 días', type: 'process', predecessors: [1], flows: ['administrativa'], origin: '', condition: '' },
-      { id: 3, phaseId: 'e2', text: 'Ejecución de actividades académicas', role: 'GP', duration: 'Variable', type: 'process', predecessors: [1], flows: ['academica'], origin: '', condition: '' },
-      { id: 4, phaseId: 'e2', text: 'Gestión contractual y compras', role: 'GOM', duration: 'Semanal', type: 'process', predecessors: [2], flows: ['administrativa'], origin: '', condition: '' },
-      { id: 5, phaseId: 'e3', text: 'Seguimiento de indicadores', role: 'GT', duration: 'Quincenal', type: 'decision', predecessors: [3, 4], flows: ['all'], origin: '', condition: 'Si hay desviaciones' },
-      { id: 6, phaseId: 'e4', text: 'Informe final de ejecución', role: 'DC', duration: '3 días', type: 'process', predecessors: [5], flows: ['all'], origin: '', condition: '' },
-    ],
-  },
-  liquidacion: {
-    flows: [
-      { id: 'financiero', label: 'Cierre Financiero', color: '#a855f7' },
-      { id: 'tecnico', label: 'Cierre Técnico', color: '#ec4899' },
-    ],
-    phases: [
-      { id: 'l1', title: '1. Consolidación', color: '#a855f7' },
-      { id: 'l2', title: '2. Validación', color: '#d946ef' },
-      { id: 'l3', title: '3. Formalización', color: '#ec4899' },
-    ],
-    activities: [
-      { id: 1, phaseId: 'l1', text: 'Consolidar soportes técnicos y financieros', role: 'GA', duration: '4 días', type: 'start', predecessors: [], flows: ['all'], origin: '', condition: '' },
-      { id: 2, phaseId: 'l1', text: 'Verificación documental de cumplimiento', role: 'GCA', duration: '2 días', type: 'process', predecessors: [1], flows: ['tecnico'], origin: '', condition: '' },
-      { id: 3, phaseId: 'l2', text: 'Conciliación de ejecución presupuestal', role: 'GA', duration: '3 días', type: 'process', predecessors: [1], flows: ['financiero'], origin: '', condition: '' },
-      { id: 4, phaseId: 'l2', text: 'Decisión: ¿Se requieren ajustes?', role: 'Sistema', duration: 'N/A', type: 'decision', predecessors: [2, 3], flows: ['all'], origin: '', condition: '' },
-      { id: 5, phaseId: 'l3', text: 'Firma de acta de liquidación', role: 'Director', duration: '1 día', type: 'process', predecessors: [4], flows: ['all'], origin: '', condition: 'Sin ajustes pendientes' },
-    ],
-  }
-};
-
-const roleDefaults = [
-  { id: 'role_gt', name: 'GT', color: '#dbeafe', textColor: '#1d4ed8' },
-  { id: 'role_ga', name: 'GA', color: '#d1fae5', textColor: '#047857' },
-  { id: 'role_gom', name: 'GOM', color: '#fef3c7', textColor: '#b45309' },
-  { id: 'role_gca', name: 'GCA', color: '#f3e8ff', textColor: '#7e22ce' },
-  { id: 'role_dc', name: 'DC', color: '#ffe4e6', textColor: '#be123c' },
-  { id: 'role_gp', name: 'GP', color: '#cffafe', textColor: '#0e7490' },
-  { id: 'role_director', name: 'Director', color: '#f1f5f9', textColor: '#334155' },
-  { id: 'role_sistema', name: 'Sistema', color: '#f3f4f6', textColor: '#374151' },
-];
-
 const rolePalette = [
   { color: '#dbeafe', textColor: '#1d4ed8' },
   { color: '#d1fae5', textColor: '#047857' },
@@ -141,12 +53,20 @@ const rolePalette = [
   { color: '#f1f5f9', textColor: '#334155' },
 ];
 
-const ADMIN_UID = import.meta.env.VITE_ADMIN_UID || "Hd0fliPDxIR0NDL2BYZqjFtTok53";
-const ADMIN_EMAIL = (import.meta.env.VITE_ADMIN_EMAIL || "platafcecp_med@unal.edu.co").toLowerCase();
+const DEFAULT_ADMIN_UID = "3VTYUmCkqNU3g2U8qvDdUzChuK13";
+const ADMIN_UIDS = (import.meta.env.VITE_ADMIN_UIDS || import.meta.env.VITE_ADMIN_UID || DEFAULT_ADMIN_UID)
+  .split(',')
+  .map(value => value.trim())
+  .filter(Boolean);
+const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || import.meta.env.VITE_ADMIN_EMAIL || "platafcecp_med@unal.edu.co")
+  .split(',')
+  .map(value => value.trim().toLowerCase())
+  .filter(Boolean);
 const isAdminSessionUser = (currentUser) => {
   if (!currentUser) return false;
   const email = (currentUser.email || '').toLowerCase();
-  return currentUser.uid === ADMIN_UID || (Boolean(ADMIN_EMAIL) && email === ADMIN_EMAIL);
+  const uid = currentUser.uid || '';
+  return ADMIN_UIDS.includes(uid) || (email && ADMIN_EMAILS.includes(email));
 };
 
 const getReadableTextColor = (hexColor) => {
@@ -169,21 +89,6 @@ const getPhaseHexColor = (phase) => {
     return matched ? oldColors[matched] : '#3b82f6';
 };
 
-const getPhaseOrderValue = (phase) => {
-  if (typeof phase?.order_index === 'number') return phase.order_index;
-  const match = `${phase?.id || ''}`.match(/\d+/);
-  return match ? parseInt(match[0], 10) : Number.MAX_SAFE_INTEGER;
-};
-
-const DEFAULT_CONFIRM_DIALOG = {
-  isOpen: false,
-  title: '',
-  message: '',
-  onConfirm: null,
-  confirmLabel: 'Confirmar',
-  confirmTone: 'danger',
-};
-
 const buildEmptyFormData = (phaseId = '') => ({
   text: '',
   description: '',
@@ -200,10 +105,11 @@ const buildEmptyFormData = (phaseId = '') => ({
 });
 
 const normalizeRole = (role) => {
-  const name = role.name || role.label || role.role || role.id || '';
+  const code = (role.code || role.shortName || role.name || role.label || role.role || role.id || '').trim();
+  const name = (role.name || role.full_name || role.fullName || code || role.id || '').trim();
   const color = role.color || '#e2e8f0';
   const textColor = role.textColor || getReadableTextColor(color);
-  return { ...role, name, color, textColor };
+  return { ...role, code: code || name, name: name || code, color, textColor };
 };
 
 export default function App() {
@@ -214,34 +120,43 @@ export default function App() {
   const [phases, setPhases] = useState([]);
   const [activities, setActivities] = useState([]);
   const [flows, setFlows] = useState([]);
-  const [roles, setRoles] = useState(() => roleDefaults.map(normalizeRole));
+  const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
   
   // Estados de Seguridad
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [loginEmail, setLoginEmail] = useState(ADMIN_EMAIL || '');
+  const [loginEmail, setLoginEmail] = useState(ADMIN_EMAILS[0] || '');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
   // Estados de Interfaz
-  const [confirmDialog, setConfirmDialog] = useState(DEFAULT_CONFIRM_DIALOG);
-  const [statusNotice, setStatusNotice] = useState({ type: '', message: '' });
+  const [confirmDialog, setConfirmDialog] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Confirmar',
+    confirmTone: 'danger',
+    isSubmitting: false,
+    error: '',
+    onConfirm: null
+  });
   const [tempFilters, setTempFilters] = useState({ flow: 'all', role: 'all' });
   const [activeFilters, setActiveFilters] = useState({ flow: 'all', role: 'all' });
   const [tempSearch, setTempSearch] = useState('');
   const [activeSearch, setActiveSearch] = useState('');
   const [selectedActivityId, setSelectedActivityId] = useState(null);
+  const [showRoleLegend, setShowRoleLegend] = useState(false);
   const [lines, setLines] = useState([]);
+  const [phaseDrafts, setPhaseDrafts] = useState({});
+  const [flowDrafts, setFlowDrafts] = useState({});
   const [roleDrafts, setRoleDrafts] = useState({});
   
   const nodeRefs = useRef({});
   const containerRef = useRef(null);
-  const initializedRef = useRef({});
-  const rolesInitializedRef = useRef(false);
+  const roleLegendRef = useRef(null);
   const nextActivityRefCounter = useRef(1);
-  const noticeTimeoutRef = useRef(null);
 
   // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
@@ -259,13 +174,37 @@ export default function App() {
     () => Object.fromEntries(phases.map((phase, index) => [phase.id, index])),
     [phases]
   );
-  const roleByName = useMemo(
-    () => Object.fromEntries(roles.map(role => [role.name, role])),
+  const roleById = useMemo(
+    () => Object.fromEntries(roles.map(role => [role.id, role])),
     [roles]
   );
+  const roleByCode = useMemo(() => {
+    const map = {};
+    roles.forEach(role => {
+      if (role.code) map[role.code] = role;
+      if (role.name && !map[role.name]) map[role.name] = role;
+    });
+    return map;
+  }, [roles]);
+  const roleIdByCode = useMemo(() => {
+    const map = {};
+    roles.forEach(role => {
+      if (role.code) map[role.code] = role.id;
+      if (role.name && !map[role.name]) map[role.name] = role.id;
+    });
+    return map;
+  }, [roles]);
   const availableRoles = useMemo(
-    () => roles.map(role => role.name),
+    () => roles.map(role => role.code).filter(Boolean),
     [roles]
+  );
+  const safeTempRoleFilter = useMemo(
+    () => (tempFilters.role !== 'all' && !availableRoles.includes(tempFilters.role) ? 'all' : tempFilters.role),
+    [availableRoles, tempFilters.role]
+  );
+  const safeActiveRoleFilter = useMemo(
+    () => (activeFilters.role !== 'all' && !availableRoles.includes(activeFilters.role) ? 'all' : activeFilters.role),
+    [availableRoles, activeFilters.role]
   );
 
   const sortedActivities = useMemo(
@@ -290,36 +229,87 @@ export default function App() {
     return map;
   }, [sortedActivities]);
   const getPhaseSortedActivities = (phaseId) => activitiesByPhase.get(phaseId) || [];
+  const resolveRoleCode = useCallback((roleId, fallbackName = '') => {
+    if (roleId && roleById[roleId]?.code) return roleById[roleId].code;
+    if (fallbackName && roleByCode[fallbackName]?.code) return roleByCode[fallbackName].code;
+    return fallbackName || '';
+  }, [roleByCode, roleById]);
   const getActivityRoles = useCallback((activity) => {
-    if (Array.isArray(activity.activity_roles) && activity.activity_roles.length > 0) return activity.activity_roles;
-    const roles = [];
-    if (activity.role) {
-      roles.push({ id: `legacy-primary-${activity.id}`, activity_id: activity.id, role_name: activity.role, role_type: 'PRIMARY' });
+    if (Array.isArray(activity.activity_roles) && activity.activity_roles.length > 0) {
+      return activity.activity_roles
+        .map((currentRole, index) => {
+          const role_name = resolveRoleCode(currentRole.role_id, currentRole.role_name || '');
+          const role_id = currentRole.role_id || roleIdByCode[role_name] || '';
+          return {
+            ...currentRole,
+            id: currentRole.id || `ar-${activity.id}-${index}`,
+            activity_id: currentRole.activity_id || activity.id,
+            role_id,
+            role_name,
+            role_type: currentRole.role_type || 'SUPPORT',
+          };
+        })
+        .filter(currentRole => currentRole.role_name);
     }
-    if (Array.isArray(activity.support_roles)) {
-      activity.support_roles.forEach((roleName, index) => {
-        roles.push({ id: `legacy-support-${activity.id}-${index}`, activity_id: activity.id, role_name: roleName, role_type: 'SUPPORT' });
+
+    const roles = [];
+    const primaryCode = resolveRoleCode(activity.primary_role_id, activity.role || '');
+    if (primaryCode) {
+      roles.push({
+        id: `legacy-primary-${activity.id}`,
+        activity_id: activity.id,
+        role_id: activity.primary_role_id || roleIdByCode[primaryCode] || '',
+        role_name: primaryCode,
+        role_type: 'PRIMARY',
       });
     }
+
+    const supportCodesById = Array.isArray(activity.support_role_ids)
+      ? activity.support_role_ids.map(roleId => resolveRoleCode(roleId, '')).filter(Boolean)
+      : [];
+    const supportCodesLegacy = Array.isArray(activity.support_roles)
+      ? activity.support_roles.map(roleName => resolveRoleCode('', roleName)).filter(Boolean)
+      : [];
+    const supportCodes = [...new Set([...supportCodesById, ...supportCodesLegacy])]
+      .filter(roleCode => roleCode && roleCode !== primaryCode);
+    supportCodes.forEach((roleCode, index) => {
+      roles.push({
+        id: `legacy-support-${activity.id}-${index}`,
+        activity_id: activity.id,
+        role_id: roleIdByCode[roleCode] || '',
+        role_name: roleCode,
+        role_type: 'SUPPORT',
+      });
+    });
     return roles;
-  }, []);
-  const getRoleBadgeStyle = useCallback((roleName) => {
-    if (!roleName) return { backgroundColor: '#f1f5f9', color: '#475569' };
-    const role = roleByName[roleName];
+  }, [resolveRoleCode, roleIdByCode]);
+  const getRoleBadgeStyle = useCallback((roleCode) => {
+    if (!roleCode) return { backgroundColor: '#f1f5f9', color: '#475569' };
+    const role = roleByCode[roleCode];
     const color = role?.color || '#e2e8f0';
     const textColor = role?.textColor || getReadableTextColor(color);
     return { backgroundColor: color, color: textColor };
-  }, [roleByName]);
-  const getPrimaryRoleName = useCallback((activity) => getActivityRoles(activity).find(role => role.role_type === 'PRIMARY')?.role_name || activity.role || '', [getActivityRoles]);
+  }, [roleByCode]);
+  const getRoleFullName = useCallback((roleCode) => roleByCode[roleCode]?.name || roleCode || '', [roleByCode]);
+  const getRoleOptionLabel = useCallback((roleCode) => {
+    const fullName = getRoleFullName(roleCode);
+    return fullName && fullName !== roleCode ? `${roleCode} · ${fullName}` : roleCode;
+  }, [getRoleFullName]);
+  const getPrimaryRoleName = useCallback((activity) => getActivityRoles(activity).find(role => role.role_type === 'PRIMARY')?.role_name || resolveRoleCode(activity.primary_role_id, activity.role || ''), [getActivityRoles, resolveRoleCode]);
   const getSupportRoleNames = useCallback((activity) => getActivityRoles(activity).filter(role => role.role_type === 'SUPPORT').map(role => role.role_name), [getActivityRoles]);
   const normalizeActivityModel = useCallback((activity) => {
-    const roles = getActivityRoles(activity);
+    const normalizedRoles = getActivityRoles(activity);
+    const primary = normalizedRoles.find(role => role.role_type === 'PRIMARY');
+    const support = normalizedRoles.filter(role => role.role_type === 'SUPPORT');
     return {
       ...activity,
-      role: getPrimaryRoleName(activity),
-      activity_roles: roles,
+      role: primary?.role_name || '',
+      primary_role_id: primary?.role_id || activity.primary_role_id || '',
+      support_roles: support.map(role => role.role_name),
+      support_role_ids: support.map(role => role.role_id).filter(Boolean),
+      activity_roles: normalizedRoles,
     };
-  }, [getActivityRoles, getPrimaryRoleName]);
+  }, [getActivityRoles]);
 
   const getTargetKey = (targetId, phaseId) => (targetId === null ? `end:${phaseId}` : `before:${targetId}`);
   const displayOrderByActivityId = useMemo(() => {
@@ -336,22 +326,8 @@ export default function App() {
   );
 
   useEffect(() => {
-    const roleSet = new Set(availableRoles);
-    if (tempFilters.role !== 'all' && !roleSet.has(tempFilters.role)) {
-      setTempFilters(current => ({ ...current, role: 'all' }));
-    }
-    if (activeFilters.role !== 'all' && !roleSet.has(activeFilters.role)) {
-      setActiveFilters(current => ({ ...current, role: 'all' }));
-    }
-  }, [availableRoles, tempFilters.role, activeFilters.role]);
-
-  useEffect(() => {
     nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, maxActivityRefNumber + 1);
   }, [maxActivityRefNumber]);
-
-  useEffect(() => () => {
-    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
-  }, []);
 
   const activitiesById = useMemo(
     () => Object.fromEntries(activities.map(activity => [activity.id, activity])),
@@ -387,43 +363,14 @@ export default function App() {
     : '';
   const isFormValid = Boolean(formData.text.trim() && formData.role && formData.duration.trim());
 
-  const clearNotice = () => {
-    if (noticeTimeoutRef.current) {
-      clearTimeout(noticeTimeoutRef.current);
-      noticeTimeoutRef.current = null;
-    }
-    setStatusNotice({ type: '', message: '' });
-  };
-
-  const showNotice = (type, message, timeoutMs = 6500) => {
-    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
-    setStatusNotice({ type, message });
-    if (timeoutMs > 0) {
-      noticeTimeoutRef.current = setTimeout(() => {
-        setStatusNotice({ type: '', message: '' });
-        noticeTimeoutRef.current = null;
-      }, timeoutMs);
-    }
-  };
-
-  const handleWriteError = (error, actionLabel = 'guardar cambios') => {
-    console.error(error);
-    const currentUid = auth.currentUser?.uid || user?.uid || 'sin UID';
-    if (error?.code === 'permission-denied') {
-      showNotice(
-        'error',
-        `Firestore rechazo la accion de ${actionLabel}. El usuario actual (${currentUid}) no tiene permisos de admin en las reglas.`
-      );
-      return;
-    }
-    showNotice('error', `No se pudo ${actionLabel}. ${error?.message || 'Error inesperado.'}`);
-  };
-
   const matchesSearch = useCallback((activity) => {
     if (activeTab !== 'diagram_list') return true;
     if (!activeSearch.trim()) return true;
     const query = activeSearch.trim().toLowerCase();
-    const roleNames = getActivityRoles(activity).map(role => role.role_name).join(' ').toLowerCase();
+    const roleNames = getActivityRoles(activity)
+      .map(role => `${role.role_name} ${getRoleFullName(role.role_name)}`)
+      .join(' ')
+      .toLowerCase();
     const haystack = [
       activityRefById[activity.id] || '',
       activity.text || '',
@@ -433,7 +380,7 @@ export default function App() {
       roleNames,
     ].join(' ').toLowerCase();
     return haystack.includes(query);
-  }, [activeSearch, activityRefById, getActivityRoles, activeTab]);
+  }, [activeSearch, activityRefById, getActivityRoles, getRoleFullName, activeTab]);
 
   // --- FIREBASE: AUTENTICACIÓN Y LECTURA ---
   useEffect(() => {
@@ -463,15 +410,38 @@ export default function App() {
     const unsubscribe = onSnapshot(rolesCol, async (snapshot) => {
       if (isDisposed) return;
       let data = snapshot.docs.map(roleDoc => normalizeRole({ id: roleDoc.id, ...roleDoc.data() }));
-      if (data.length === 0 && !rolesInitializedRef.current) {
-        rolesInitializedRef.current = true;
-        const batch = writeBatch(db);
-        roleDefaults.forEach(role => batch.set(doc(db, getRolesColPath(), role.id), role));
-        await batch.commit();
-        data = roleDefaults.map(normalizeRole);
+
+      const roleBatch = writeBatch(db);
+      let hasRoleFixes = false;
+      data.forEach(role => {
+        const updates = {};
+        if (!role.code) {
+          updates.code = role.name;
+        }
+        if (Object.keys(updates).length > 0) {
+          hasRoleFixes = true;
+          roleBatch.set(doc(db, getRolesColPath(), role.id), updates, { merge: true });
+        }
+      });
+
+      if (hasRoleFixes) {
+        await roleBatch.commit();
+        if (isDisposed) return;
       }
-      data.sort((a, b) => a.name.localeCompare(b.name));
+
+      data = data.map(normalizeRole);
+      data.sort((a, b) => (a.code || a.name).localeCompare(b.code || b.name));
       setRoles(data);
+      setRoleDrafts(current => {
+        const next = { ...current };
+        data.forEach(role => {
+          const existing = current[role.id];
+          if (!existing) {
+            next[role.id] = { name: role.name, code: role.code, color: role.color };
+          }
+        });
+        return next;
+      });
     }, (error) => console.error(error));
 
     return () => {
@@ -488,53 +458,104 @@ export default function App() {
     let unsubActs = () => {};
 
     const stageColPath = (colName) => getStageColPath(activeStage, colName);
-    const stageDefaultsData = stageDefaults[activeStage];
-
-    const bootstrapStageData = async () => {
-      initializedRef.current[activeStage] = true;
-      const batch = writeBatch(db);
-      stageDefaultsData.flows.forEach(f => batch.set(doc(db, stageColPath('flows'), f.id), f));
-      stageDefaultsData.phases.forEach(p => batch.set(doc(db, stageColPath('phases'), p.id), p));
-      stageDefaultsData.activities.forEach((a, index) => {
-        const activity_ref = formatActivityRef(index + 1);
-        batch.set(doc(db, stageColPath('activities'), a.id.toString()), { ...a, order_index: (index + 1) * ORDER_GAP, activity_ref });
-      });
-      await batch.commit();
-      nextActivityRefCounter.current = Math.max(nextActivityRefCounter.current, stageDefaultsData.activities.length + 1);
-    };
 
     const listen = async () => {
-      unsubFlows = onSnapshot(collection(db, stageColPath('flows')), (snapshot) => {
-        let data = snapshot.docs.map(doc => doc.data());
-        if (data.length === 0 && !initializedRef.current[activeStage]) {
-          data = stageDefaultsData.flows;
+      unsubFlows = onSnapshot(collection(db, stageColPath('flows')), async (snapshot) => {
+        if (isDisposed) return;
+        let data = snapshot.docs.map(currentDoc => ({ id: currentDoc.id, ...currentDoc.data() }));
+
+        const batch = writeBatch(db);
+        let hasFixes = false;
+        const sorted = [...data].sort((a, b) => {
+          const aOrder = typeof a.order_index === 'number' ? a.order_index : Number.MAX_SAFE_INTEGER;
+          const bOrder = typeof b.order_index === 'number' ? b.order_index : Number.MAX_SAFE_INTEGER;
+          if (aOrder !== bOrder) return aOrder - bOrder;
+          return (a.label || '').localeCompare(b.label || '');
+        });
+
+        sorted.forEach((flow, index) => {
+          const expectedOrder = (index + 1) * ORDER_GAP;
+          if (typeof flow.order_index !== 'number') {
+            hasFixes = true;
+            flow.order_index = expectedOrder;
+            batch.set(doc(db, stageColPath('flows'), flow.id), { order_index: expectedOrder }, { merge: true });
+          }
+        });
+
+        if (hasFixes) {
+          await batch.commit();
+          if (isDisposed) return;
         }
-        setFlows(data);
+
+        sorted.sort((a, b) => {
+          const aOrder = typeof a.order_index === 'number' ? a.order_index : Number.MAX_SAFE_INTEGER;
+          const bOrder = typeof b.order_index === 'number' ? b.order_index : Number.MAX_SAFE_INTEGER;
+          if (aOrder !== bOrder) return aOrder - bOrder;
+          return (a.label || '').localeCompare(b.label || '');
+        });
+        setFlows(sorted);
+        setFlowDrafts(current => {
+          const next = { ...current };
+          sorted.forEach(flow => {
+            if (!next[flow.id]) next[flow.id] = { label: flow.label || '', color: flow.color || '#64748b' };
+          });
+          return next;
+        });
       }, (error) => console.error(error));
 
-      unsubPhases = onSnapshot(collection(db, stageColPath('phases')), (snapshot) => {
-        let data = snapshot.docs.map(doc => doc.data());
-        data.sort((a, b) => {
-          const orderA = getPhaseOrderValue(a);
-          const orderB = getPhaseOrderValue(b);
-          if (orderA !== orderB) return orderA - orderB;
+      unsubPhases = onSnapshot(collection(db, stageColPath('phases')), async (snapshot) => {
+        if (isDisposed) return;
+        let data = snapshot.docs.map(currentDoc => ({ id: currentDoc.id, ...currentDoc.data() }));
+
+        const batch = writeBatch(db);
+        let hasFixes = false;
+        const sorted = [...data].sort((a, b) => {
+          const aOrder = typeof a.order_index === 'number' ? a.order_index : Number.MAX_SAFE_INTEGER;
+          const bOrder = typeof b.order_index === 'number' ? b.order_index : Number.MAX_SAFE_INTEGER;
+          if (aOrder !== bOrder) return aOrder - bOrder;
           return (a.title || '').localeCompare(b.title || '');
         });
-        if (data.length === 0 && !initializedRef.current[activeStage]) {
-          data = stageDefaultsData.phases;
+
+        sorted.forEach((phase, index) => {
+          const expectedOrder = (index + 1) * ORDER_GAP;
+          if (typeof phase.order_index !== 'number') {
+            hasFixes = true;
+            phase.order_index = expectedOrder;
+            batch.set(doc(db, stageColPath('phases'), phase.id), { order_index: expectedOrder }, { merge: true });
+          }
+        });
+
+        if (hasFixes) {
+          await batch.commit();
+          if (isDisposed) return;
         }
-        setPhases(data);
+
+        sorted.sort((a, b) => {
+          const aOrder = typeof a.order_index === 'number' ? a.order_index : Number.MAX_SAFE_INTEGER;
+          const bOrder = typeof b.order_index === 'number' ? b.order_index : Number.MAX_SAFE_INTEGER;
+          if (aOrder !== bOrder) return aOrder - bOrder;
+          return (a.title || '').localeCompare(b.title || '');
+        });
+        setPhases(sorted);
+        setPhaseDrafts(current => {
+          const next = { ...current };
+          sorted.forEach(phase => {
+            if (!next[phase.id]) next[phase.id] = { title: phase.title || '', color: getPhaseHexColor(phase) };
+          });
+          return next;
+        });
       }, (error) => console.error(error));
 
       unsubActs = onSnapshot(collection(db, stageColPath('activities')), async (snapshot) => {
         if (isDisposed) return;
-        let data = snapshot.docs.map(currentDoc => currentDoc.data());
-
-        if (data.length === 0 && !initializedRef.current[activeStage]) {
-          await bootstrapStageData();
-          if (isDisposed) return;
-          data = stageDefaultsData.activities.map((a, index) => ({ ...a, order_index: (index + 1) * ORDER_GAP, activity_ref: formatActivityRef(index + 1) }));
-        }
+        let data = snapshot.docs.map(currentDoc => {
+          const currentData = currentDoc.data();
+          const fallbackId = Number.parseInt(currentDoc.id, 10);
+          return {
+            id: Number.isFinite(fallbackId) ? fallbackId : currentData.id,
+            ...currentData,
+          };
+        });
 
         const phaseBuckets = new Map();
         data.forEach(activity => {
@@ -547,18 +568,89 @@ export default function App() {
         let maxRef = data.reduce((max, activity) => Math.max(max, getActivityRefNumber(activity.activity_ref)), 0);
 
         phaseBuckets.forEach((phaseActivities) => {
-          phaseActivities.sort((a, b) => a.id - b.id);
+          phaseActivities.sort((a, b) => {
+            const aOrder = typeof a.order_index === 'number' ? a.order_index : Number.MAX_SAFE_INTEGER;
+            const bOrder = typeof b.order_index === 'number' ? b.order_index : Number.MAX_SAFE_INTEGER;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+            return a.id - b.id;
+          });
+
           phaseActivities.forEach((activity, index) => {
             const updates = {};
+
             if (typeof activity.order_index !== 'number') {
               updates.order_index = (index + 1) * ORDER_GAP;
               activity.order_index = updates.order_index;
             }
+
             if (!activity.activity_ref) {
               maxRef += 1;
               updates.activity_ref = formatActivityRef(maxRef);
               activity.activity_ref = updates.activity_ref;
             }
+
+            if (!Array.isArray(activity.predecessors)) {
+              updates.predecessors = [];
+              activity.predecessors = [];
+            }
+
+            if (!Array.isArray(activity.flows) || activity.flows.length === 0) {
+              updates.flows = ['all'];
+              activity.flows = ['all'];
+            }
+
+            const primaryRoleCode = resolveRoleCode(activity.primary_role_id || '', activity.role || '');
+            const primaryRoleId = primaryRoleCode ? (roleIdByCode[primaryRoleCode] || activity.primary_role_id || '') : '';
+            const supportByLegacy = Array.isArray(activity.support_roles) ? activity.support_roles.map(roleName => resolveRoleCode('', roleName)).filter(Boolean) : [];
+            const supportByIds = Array.isArray(activity.support_role_ids) ? activity.support_role_ids.map(roleId => resolveRoleCode(roleId, '')).filter(Boolean) : [];
+            const supportRoleCodes = [...new Set([...supportByIds, ...supportByLegacy])]
+              .filter(roleCode => roleCode && roleCode !== primaryRoleCode);
+            const supportRoleIds = supportRoleCodes.map(roleCode => roleIdByCode[roleCode] || '').filter(Boolean);
+            const normalizedActivityRoles = [
+              ...(primaryRoleCode ? [{
+                id: activity.activity_roles?.find(role => role.role_type === 'PRIMARY')?.id || `ar-primary-${activity.id}`,
+                activity_id: activity.id,
+                role_id: primaryRoleId,
+                role_name: primaryRoleCode,
+                role_type: 'PRIMARY',
+              }] : []),
+              ...supportRoleCodes.map((roleCode, supportIndex) => ({
+                id: activity.activity_roles?.find(role => role.role_type === 'SUPPORT' && resolveRoleCode(role.role_id, role.role_name || '') === roleCode)?.id || `ar-support-${activity.id}-${supportIndex}`,
+                activity_id: activity.id,
+                role_id: roleIdByCode[roleCode] || '',
+                role_name: roleCode,
+                role_type: 'SUPPORT',
+              })),
+            ];
+
+            if ((activity.role || '') !== primaryRoleCode) {
+              updates.role = primaryRoleCode;
+              activity.role = primaryRoleCode;
+            }
+
+            if ((activity.primary_role_id || '') !== (primaryRoleId || '')) {
+              updates.primary_role_id = primaryRoleId;
+              activity.primary_role_id = primaryRoleId;
+            }
+
+            const currentSupportRoles = Array.isArray(activity.support_roles) ? activity.support_roles : [];
+            if (JSON.stringify(currentSupportRoles) !== JSON.stringify(supportRoleCodes)) {
+              updates.support_roles = supportRoleCodes;
+              activity.support_roles = supportRoleCodes;
+            }
+
+            const currentSupportRoleIds = Array.isArray(activity.support_role_ids) ? activity.support_role_ids.filter(Boolean) : [];
+            if (JSON.stringify(currentSupportRoleIds) !== JSON.stringify(supportRoleIds)) {
+              updates.support_role_ids = supportRoleIds;
+              activity.support_role_ids = supportRoleIds;
+            }
+
+            const currentActivityRoles = Array.isArray(activity.activity_roles) ? activity.activity_roles : [];
+            if (JSON.stringify(currentActivityRoles) !== JSON.stringify(normalizedActivityRoles)) {
+              updates.activity_roles = normalizedActivityRoles;
+              activity.activity_roles = normalizedActivityRoles;
+            }
+
             if (Object.keys(updates).length > 0) {
               hasActivityFixes = true;
               batch.set(doc(db, stageColPath('activities'), activity.id.toString()), updates, { merge: true });
@@ -584,7 +676,7 @@ export default function App() {
       unsubPhases();
       unsubActs();
     };
-  }, [user, activeStage, normalizeActivityModel]);
+  }, [user, activeStage, normalizeActivityModel, resolveRoleCode, roleIdByCode]);
 
 
   const getDownstreamPath = useCallback((startId) => {
@@ -621,7 +713,7 @@ export default function App() {
 
   const getOpacity = useCallback((act) => {
     const matchesFlow = activeFilters.flow === 'all' || (act.flows && act.flows.includes(activeFilters.flow));
-    const matchesRole = activeFilters.role === 'all' || getActivityRoles(act).some(role => role.role_name === activeFilters.role);
+    const matchesRole = safeActiveRoleFilter === 'all' || getActivityRoles(act).some(role => role.role_name === safeActiveRoleFilter);
     const matchesSearchQuery = matchesSearch(act);
     if (!matchesFlow || !matchesRole || !matchesSearchQuery) return 'hidden';
     if (selectedActivityId) {
@@ -631,7 +723,7 @@ export default function App() {
       return 'opacity-20 grayscale';
     }
     return 'opacity-100';
-  }, [activeFilters.flow, activeFilters.role, getActivityRoles, matchesSearch, getDownstreamPath, getUpstreamPath, selectedActivityId]);
+  }, [activeFilters.flow, safeActiveRoleFilter, getActivityRoles, matchesSearch, getDownstreamPath, getUpstreamPath, selectedActivityId]);
 
   useLayoutEffect(() => {
     const calculateLines = () => {
@@ -780,101 +872,243 @@ export default function App() {
     setFormData(buildEmptyFormData(''));
   };
 
-  const applyFilters = () => { setActiveFilters(tempFilters); setActiveSearch(tempSearch); setSelectedActivityId(null); };
-  const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setTempSearch(''); setActiveSearch(''); setSelectedActivityId(null); };
+  const applyFilters = () => {
+    setActiveFilters({ ...tempFilters, role: safeTempRoleFilter });
+    setActiveSearch(tempSearch);
+    setSelectedActivityId(null);
+    setShowRoleLegend(false);
+  };
+  const clearFilters = () => { const reset = { flow: 'all', role: 'all' }; setTempFilters(reset); setActiveFilters(reset); setTempSearch(''); setActiveSearch(''); setSelectedActivityId(null); setShowRoleLegend(false); };
+
+  useEffect(() => {
+    if (!showRoleLegend) return undefined;
+    const handleOutsideClick = (event) => {
+      if (roleLegendRef.current && !roleLegendRef.current.contains(event.target)) {
+        setShowRoleLegend(false);
+      }
+    };
+    window.addEventListener('pointerdown', handleOutsideClick);
+    return () => window.removeEventListener('pointerdown', handleOutsideClick);
+  }, [showRoleLegend]);
 
   // --- CRUD A FIREBASE (Guardado en Tiempo Real) ---
+  const getConfirmErrorMessage = (error) => {
+    if (!error) return 'No se pudo completar la operación.';
+    if (error?.code === 'permission-denied' || error?.code === 'firestore/permission-denied') {
+      return 'Firestore rechazó la operación por permisos. Verifica que tu UID admin esté en firestore.rules y despliega reglas.';
+    }
+    if (error?.code === 'unavailable' || error?.code === 'firestore/unavailable') {
+      return 'Firestore no está disponible en este momento. Intenta de nuevo en unos segundos.';
+    }
+    return error?.message || 'No se pudo completar la operación.';
+  };
+
+  const closeConfirmDialog = () => {
+    setConfirmDialog(current => ({
+      ...current,
+      isOpen: false,
+      isSubmitting: false,
+      error: '',
+    }));
+  };
+
+  const openConfirmDialog = ({ title, message, confirmLabel = 'Confirmar', confirmTone = 'primary', onConfirm }) => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      confirmLabel,
+      confirmTone,
+      isSubmitting: false,
+      error: '',
+      onConfirm: async () => {
+        setConfirmDialog(current => ({ ...current, isSubmitting: true, error: '' }));
+        try {
+          await onConfirm?.();
+          closeConfirmDialog();
+        } catch (error) {
+          console.error(error);
+          setConfirmDialog(current => ({
+            ...current,
+            isSubmitting: false,
+            error: getConfirmErrorMessage(error),
+          }));
+        }
+      }
+    });
+  };
 
   const requestDeleteActivity = (id) => {
-      setConfirmDialog({
-          isOpen: true,
-          title: 'Eliminar Actividad',
-          message: `¿Estás seguro de que deseas eliminar la actividad #${id}?`,
-          confirmLabel: 'Si, eliminar',
-          confirmTone: 'danger',
-          onConfirm: async () => {
-              // 1. Borrar actividad principal
-              await deleteDoc(doc(db, getStageColPath(activeStage, 'activities'), id.toString()));
-              
-              // 2. Limpiar dependencias en otras actividades
-              const batch = writeBatch(db);
-              activities.forEach(a => {
-                  if (a.predecessors.includes(id)) {
-                      const updatedPredecessors = a.predecessors.filter(pid => pid !== id);
-                      batch.update(doc(db, getStageColPath(activeStage, 'activities'), a.id.toString()), { predecessors: updatedPredecessors });
-                  }
-              });
-              await batch.commit();
-              
-              if (isEditingActivity === id) setIsEditingActivity(null);
-              setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
-          }
+      openConfirmDialog({
+        title: 'Eliminar Actividad',
+        message: `¿Estás seguro de que deseas eliminar la actividad #${id}?`,
+        confirmLabel: 'Sí, eliminar',
+        confirmTone: 'danger',
+        onConfirm: async () => {
+          await deleteDoc(doc(db, getStageColPath(activeStage, 'activities'), id.toString()));
+          const batch = writeBatch(db);
+          activities.forEach(activity => {
+            if (activity.predecessors.includes(id)) {
+              const updatedPredecessors = activity.predecessors.filter(predecessorId => predecessorId !== id);
+              batch.update(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()), { predecessors: updatedPredecessors });
+            }
+          });
+          await batch.commit();
+          if (isEditingActivity === id) setIsEditingActivity(null);
+        }
       });
   };
 
   const requestDeletePhase = (id) => {
-      setConfirmDialog({
-          isOpen: true,
-          title: 'Eliminar Fase Completa',
-          message: '¡Atención! Al borrar esta fase, también se eliminarán TODAS las actividades que pertenecen a ella.',
-          confirmLabel: 'Si, eliminar',
-          confirmTone: 'danger',
-          onConfirm: async () => {
-              const batch = writeBatch(db);
-              batch.delete(doc(db, getStageColPath(activeStage, 'phases'), id));
-              activities.forEach(a => {
-                  if (a.phaseId === id) batch.delete(doc(db, getStageColPath(activeStage, 'activities'), a.id.toString()));
-              });
-              await batch.commit();
-              setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
-          }
+      openConfirmDialog({
+        title: 'Eliminar Fase Completa',
+        message: '¡Atención! Al borrar esta fase, también se eliminarán TODAS las actividades que pertenecen a ella.',
+        confirmLabel: 'Sí, eliminar',
+        confirmTone: 'danger',
+        onConfirm: async () => {
+          const batch = writeBatch(db);
+          batch.delete(doc(db, getStageColPath(activeStage, 'phases'), id));
+          activities.forEach(activity => {
+            if (activity.phaseId === id) batch.delete(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()));
+          });
+          await batch.commit();
+        }
       });
   };
 
   const requestDeleteFlow = (id) => {
-      setConfirmDialog({
-          isOpen: true,
-          title: 'Eliminar Ruta',
-          message: '¿Borrar esta ruta? Las actividades seguirán existiendo, pero perderán su asignación a este flujo.',
-          confirmLabel: 'Si, eliminar',
-          confirmTone: 'danger',
-          onConfirm: async () => {
-              const batch = writeBatch(db);
-              batch.delete(doc(db, getStageColPath(activeStage, 'flows'), id));
-              activities.forEach(a => {
-                  if (a.flows.includes(id)) {
-                      const updatedFlows = a.flows.filter(fid => fid !== id);
-                      batch.update(doc(db, getStageColPath(activeStage, 'activities'), a.id.toString()), { flows: updatedFlows });
-                  }
-              });
-              await batch.commit();
-              setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
-          }
+      openConfirmDialog({
+        title: 'Eliminar Ruta',
+        message: '¿Borrar esta ruta? Las actividades seguirán existiendo, pero perderán su asignación a este flujo.',
+        confirmLabel: 'Sí, eliminar',
+        confirmTone: 'danger',
+        onConfirm: async () => {
+          const batch = writeBatch(db);
+          batch.delete(doc(db, getStageColPath(activeStage, 'flows'), id));
+          activities.forEach(activity => {
+            if (activity.flows.includes(id)) {
+              const updatedFlows = activity.flows.filter(flowId => flowId !== id);
+              batch.update(doc(db, getStageColPath(activeStage, 'activities'), activity.id.toString()), { flows: updatedFlows });
+            }
+          });
+          await batch.commit();
+        }
       });
   };
 
+  const swapOrderIndex = async (collectionName, currentItem, targetItem) => {
+    const batch = writeBatch(db);
+    batch.set(
+      doc(db, getStageColPath(activeStage, collectionName), currentItem.id),
+      { order_index: targetItem.order_index ?? ORDER_GAP },
+      { merge: true }
+    );
+    batch.set(
+      doc(db, getStageColPath(activeStage, collectionName), targetItem.id),
+      { order_index: currentItem.order_index ?? (ORDER_GAP * 2) },
+      { merge: true }
+    );
+    await batch.commit();
+  };
+
+  const movePhaseByStep = async (phaseId, direction) => {
+    const currentIndex = phases.findIndex(phase => phase.id === phaseId);
+    if (currentIndex === -1) return;
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= phases.length) return;
+    const currentPhase = phases[currentIndex];
+    const targetPhase = phases[targetIndex];
+    openConfirmDialog({
+      title: 'Reordenar Fase',
+      message: `¿Mover "${currentPhase.title}" ${direction === 'up' ? 'arriba' : 'abajo'}?`,
+      confirmLabel: 'Sí, mover',
+      onConfirm: async () => {
+        await swapOrderIndex('phases', currentPhase, targetPhase);
+      }
+    });
+  };
+
+  const moveFlowByStep = async (flowId, direction) => {
+    const currentIndex = flows.findIndex(flow => flow.id === flowId);
+    if (currentIndex === -1) return;
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= flows.length) return;
+    const currentFlow = flows[currentIndex];
+    const targetFlow = flows[targetIndex];
+    openConfirmDialog({
+      title: 'Reordenar Ruta',
+      message: `¿Mover "${currentFlow.label}" ${direction === 'up' ? 'arriba' : 'abajo'}?`,
+      confirmLabel: 'Sí, mover',
+      onConfirm: async () => {
+        await swapOrderIndex('flows', currentFlow, targetFlow);
+      }
+    });
+  };
+
   const addPhase = async () => {
-     const newId = `p${Date.now()}`;
-     const newPhase = { id: newId, title: 'Nueva Fase', color: '#3b82f6' };
-     await setDoc(doc(db, getStageColPath(activeStage, 'phases'), newId), newPhase);
+    const nextOrder = ((phases.length + 1) * ORDER_GAP);
+    openConfirmDialog({
+      title: 'Crear Fase',
+      message: '¿Crear una nueva fase al final de la etapa actual?',
+      confirmLabel: 'Sí, crear',
+      onConfirm: async () => {
+        const newId = `p${Date.now()}`;
+        const newPhase = { id: newId, title: 'Nueva Fase', color: '#3b82f6', order_index: nextOrder };
+        await setDoc(doc(db, getStageColPath(activeStage, 'phases'), newId), newPhase);
+      }
+    });
   };
 
   const addFlow = async () => {
-      const newId = `ruta_${Date.now()}`;
-      const newFlow = { id: newId, label: 'Nueva Ruta', color: '#64748b' };
-      await setDoc(doc(db, getStageColPath(activeStage, 'flows'), newId), newFlow);
+    const nextOrder = ((flows.length + 1) * ORDER_GAP);
+    openConfirmDialog({
+      title: 'Crear Ruta',
+      message: '¿Crear una nueva ruta al final de la etapa actual?',
+      confirmLabel: 'Sí, crear',
+      onConfirm: async () => {
+        const newId = `ruta_${Date.now()}`;
+        const newFlow = { id: newId, label: 'Nueva Ruta', color: '#64748b', order_index: nextOrder };
+        await setDoc(doc(db, getStageColPath(activeStage, 'flows'), newId), newFlow);
+      }
+    });
   };
 
-  const updatePhaseTitle = async (id, newTitle) => {
-      await setDoc(doc(db, getStageColPath(activeStage, 'phases'), id), { title: newTitle }, { merge: true });
+  const savePhaseDraft = async (phaseId) => {
+    const phase = phases.find(current => current.id === phaseId);
+    const draft = phaseDrafts[phaseId];
+    if (!phase || !draft) return;
+    const title = (draft.title || '').trim();
+    const color = draft.color || getPhaseHexColor(phase);
+    if (!title) return;
+    const changed = title !== (phase.title || '') || color !== getPhaseHexColor(phase);
+    if (!changed) return;
+    openConfirmDialog({
+      title: 'Guardar Fase',
+      message: `¿Guardar cambios en la fase "${phase.title}"?`,
+      confirmLabel: 'Sí, guardar',
+      onConfirm: async () => {
+        await setDoc(doc(db, getStageColPath(activeStage, 'phases'), phaseId), { title, color }, { merge: true });
+      }
+    });
   };
 
-  const updatePhaseColor = async (id, newColor) => {
-      await setDoc(doc(db, getStageColPath(activeStage, 'phases'), id), { color: newColor }, { merge: true });
-  };
-
-  const updateFlowLabel = async (id, newLabel) => {
-      await setDoc(doc(db, getStageColPath(activeStage, 'flows'), id), { label: newLabel }, { merge: true });
+  const saveFlowDraft = async (flowId) => {
+    const flow = flows.find(current => current.id === flowId);
+    const draft = flowDrafts[flowId];
+    if (!flow || !draft) return;
+    const label = (draft.label || '').trim();
+    const color = draft.color || flow.color || '#64748b';
+    if (!label) return;
+    const changed = label !== (flow.label || '') || color !== (flow.color || '#64748b');
+    if (!changed) return;
+    openConfirmDialog({
+      title: 'Guardar Ruta',
+      message: `¿Guardar cambios en la ruta "${flow.label}"?`,
+      confirmLabel: 'Sí, guardar',
+      onConfirm: async () => {
+        await setDoc(doc(db, getStageColPath(activeStage, 'flows'), flowId), { label, color }, { merge: true });
+      }
+    });
   };
 
   const commitActivityRoleUpdates = async (updates) => {
@@ -891,32 +1125,52 @@ export default function App() {
     }
   };
 
-  const renameRoleAcrossStages = async (oldName, newName) => {
-    if (!oldName || !newName || oldName === newName) return;
+  const syncRoleAcrossStages = async (roleId, oldCode, newCode) => {
+    if (!roleId || !newCode) return;
     const updates = [];
     for (const stage of processStages) {
       const snapshot = await getDocs(collection(db, getStageColPath(stage.id, 'activities')));
       snapshot.forEach((activityDoc) => {
         const activity = activityDoc.data();
-        let changed = false;
         const update = {};
+        let changed = false;
 
-        if (activity.role === oldName) {
-          update.role = newName;
+        const currentPrimaryRole = resolveRoleCode(activity.primary_role_id || '', activity.role || '');
+        const isPrimaryMatch = activity.primary_role_id === roleId || currentPrimaryRole === oldCode;
+        if (isPrimaryMatch) {
+          update.role = newCode;
+          update.primary_role_id = roleId;
           changed = true;
         }
 
         if (Array.isArray(activity.support_roles)) {
-          const updatedSupport = activity.support_roles.map(role => role === oldName ? newName : role);
-          if (updatedSupport.join('|') !== activity.support_roles.join('|')) {
+          const updatedSupport = [...new Set(activity.support_roles.map(role => role === oldCode ? newCode : role).filter(Boolean))];
+          if (JSON.stringify(updatedSupport) !== JSON.stringify(activity.support_roles)) {
             update.support_roles = updatedSupport;
+            changed = true;
+          }
+          if (updatedSupport.includes(newCode)) {
+            const updatedSupportRoleIds = Array.isArray(activity.support_role_ids) ? [...new Set([...activity.support_role_ids, roleId])] : [roleId];
+            if (JSON.stringify(updatedSupportRoleIds) !== JSON.stringify(activity.support_role_ids || [])) {
+              update.support_role_ids = updatedSupportRoleIds;
+              changed = true;
+            }
+          }
+        }
+
+        if (Array.isArray(activity.support_role_ids) && activity.support_role_ids.includes(roleId)) {
+          const normalizedSupportRoles = Array.isArray(update.support_roles) ? update.support_roles : (activity.support_roles || []);
+          if (!normalizedSupportRoles.includes(newCode)) {
+            update.support_roles = [...normalizedSupportRoles, newCode];
             changed = true;
           }
         }
 
         if (Array.isArray(activity.activity_roles)) {
           const updatedRoles = activity.activity_roles.map(role => (
-            role.role_name === oldName ? { ...role, role_name: newName } : role
+            (role.role_id === roleId || role.role_name === oldCode)
+              ? { ...role, role_id: roleId, role_name: newCode }
+              : role
           ));
           if (JSON.stringify(updatedRoles) !== JSON.stringify(activity.activity_roles)) {
             update.activity_roles = updatedRoles;
@@ -932,31 +1186,41 @@ export default function App() {
     if (updates.length > 0) await commitActivityRoleUpdates(updates);
   };
 
-  const removeRoleAcrossStages = async (roleName) => {
-    if (!roleName) return;
+  const removeRoleAcrossStages = async (roleId, roleCode) => {
+    if (!roleId && !roleCode) return;
     const updates = [];
     for (const stage of processStages) {
       const snapshot = await getDocs(collection(db, getStageColPath(stage.id, 'activities')));
       snapshot.forEach((activityDoc) => {
         const activity = activityDoc.data();
-        let changed = false;
         const update = {};
+        let changed = false;
 
-        if (activity.role === roleName) {
+        const currentPrimaryRole = resolveRoleCode(activity.primary_role_id || '', activity.role || '');
+        if (activity.primary_role_id === roleId || currentPrimaryRole === roleCode) {
           update.role = '';
+          update.primary_role_id = '';
           changed = true;
         }
 
         if (Array.isArray(activity.support_roles)) {
-          const updatedSupport = activity.support_roles.filter(role => role !== roleName);
+          const updatedSupport = activity.support_roles.filter(role => role !== roleCode);
           if (updatedSupport.length !== activity.support_roles.length) {
             update.support_roles = updatedSupport;
             changed = true;
           }
         }
 
+        if (Array.isArray(activity.support_role_ids)) {
+          const updatedSupportRoleIds = activity.support_role_ids.filter(currentRoleId => currentRoleId !== roleId);
+          if (updatedSupportRoleIds.length !== activity.support_role_ids.length) {
+            update.support_role_ids = updatedSupportRoleIds;
+            changed = true;
+          }
+        }
+
         if (Array.isArray(activity.activity_roles)) {
-          const updatedRoles = activity.activity_roles.filter(role => role.role_name !== roleName);
+          const updatedRoles = activity.activity_roles.filter(role => role.role_id !== roleId && role.role_name !== roleCode);
           if (updatedRoles.length !== activity.activity_roles.length) {
             update.activity_roles = updatedRoles;
             changed = true;
@@ -973,46 +1237,72 @@ export default function App() {
 
   const addRole = async () => {
     const palette = rolePalette[roles.length % rolePalette.length];
-    const newRole = {
-      id: `role_${Date.now()}`,
-      name: 'Nuevo Rol',
-      color: palette.color,
-      textColor: palette.textColor,
-    };
-    await setDoc(doc(db, getRolesColPath(), newRole.id), newRole);
-    setRoleDrafts(current => ({ ...current, [newRole.id]: newRole.name }));
+    openConfirmDialog({
+      title: 'Crear Rol',
+      message: '¿Crear un nuevo rol disponible para todas las etapas?',
+      confirmLabel: 'Sí, crear',
+      onConfirm: async () => {
+        const defaultCode = `ROL${roles.length + 1}`;
+        const newRole = {
+          id: `role_${Date.now()}`,
+          code: defaultCode,
+          name: 'Nuevo Rol',
+          color: palette.color,
+          textColor: palette.textColor,
+        };
+        await setDoc(doc(db, getRolesColPath(), newRole.id), newRole);
+      }
+    });
   };
 
-  const updateRoleColor = async (roleId, newColor) => {
-    await setDoc(
-      doc(db, getRolesColPath(), roleId),
-      { color: newColor, textColor: getReadableTextColor(newColor) },
-      { merge: true }
-    );
-  };
+  const saveRoleDraft = async (role) => {
+    const draft = roleDrafts[role.id] || { name: role.name, code: role.code, color: role.color };
+    const nextName = (draft.name || '').trim();
+    const nextCode = (draft.code || '').trim();
+    const nextColor = draft.color || role.color;
+    if (!nextName || !nextCode) return;
 
-  const commitRoleRename = async (role, newName) => {
-    const trimmed = newName.trim();
-    if (!trimmed || trimmed === role.name) {
-      setRoleDrafts(current => ({ ...current, [role.id]: role.name }));
+    const duplicatedCode = roles.some(currentRole => currentRole.id !== role.id && currentRole.code === nextCode);
+    if (duplicatedCode) {
+      openConfirmDialog({
+        title: 'Convención Duplicada',
+        message: `La convención "${nextCode}" ya está en uso. Debe ser única para evitar ambigüedades.`,
+        confirmLabel: 'Entendido',
+        confirmTone: 'danger',
+        onConfirm: async () => {}
+      });
       return;
     }
-    await setDoc(doc(db, getRolesColPath(), role.id), { name: trimmed }, { merge: true });
-    await renameRoleAcrossStages(role.name, trimmed);
-    setRoleDrafts(current => ({ ...current, [role.id]: trimmed }));
+
+    const changed = nextName !== role.name || nextCode !== role.code || nextColor !== role.color;
+    if (!changed) return;
+
+    openConfirmDialog({
+      title: 'Guardar Rol',
+      message: `¿Guardar cambios en el rol "${role.code}"?`,
+      confirmLabel: 'Sí, guardar',
+      onConfirm: async () => {
+        await setDoc(
+          doc(db, getRolesColPath(), role.id),
+          { name: nextName, code: nextCode, color: nextColor, textColor: getReadableTextColor(nextColor) },
+          { merge: true }
+        );
+        if (nextCode !== role.code) {
+          await syncRoleAcrossStages(role.id, role.code, nextCode);
+        }
+      }
+    });
   };
 
   const requestDeleteRole = (role) => {
-    setConfirmDialog({
-      isOpen: true,
+    openConfirmDialog({
       title: 'Eliminar Rol',
-      message: `¿Eliminar el rol "${role.name}"? Se eliminará de todas las actividades.`,
-      confirmLabel: 'Si, eliminar',
+      message: `¿Eliminar el rol "${role.code}"? Se eliminará de todas las actividades.`,
+      confirmLabel: 'Sí, eliminar',
       confirmTone: 'danger',
       onConfirm: async () => {
         await deleteDoc(doc(db, getRolesColPath(), role.id));
-        await removeRoleAcrossStages(role.name);
-        setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
+        await removeRoleAcrossStages(role.id, role.code);
       }
     });
   };
@@ -1114,20 +1404,16 @@ export default function App() {
     if (!movingActivity) return;
     if (targetBeforeId === activityId) return;
 
-    try {
-      const nextOrderIndex = await calculateOrderIndex(targetPhaseId, targetBeforeId, activityId);
-      await setDoc(
-        doc(db, getStageColPath(activeStage, 'activities'), activityId.toString()),
-        { phaseId: targetPhaseId, order_index: nextOrderIndex },
-        { merge: true }
-      );
+    const nextOrderIndex = await calculateOrderIndex(targetPhaseId, targetBeforeId, activityId);
+    await setDoc(
+      doc(db, getStageColPath(activeStage, 'activities'), activityId.toString()),
+      { phaseId: targetPhaseId, order_index: nextOrderIndex },
+      { merge: true }
+    );
 
-      if (keepSelection) {
-        setIsEditingActivity(activityId);
-        setSelectedActivityId(activityId);
-      }
-    } catch (error) {
-      handleWriteError(error, 'reordenar la actividad');
+    if (keepSelection) {
+      setIsEditingActivity(activityId);
+      setSelectedActivityId(activityId);
     }
   };
 
@@ -1188,79 +1474,66 @@ export default function App() {
   
   const handleSaveActivity = async () => {
     if (!validateForm()) return;
-    const persistActivity = async () => {
-      let preds = formData.predecessors;
-      if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
+    let preds = formData.predecessors;
+    if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
 
-      const primaryRole = formData.role || '';
-      const supportRoles = (formData.support_roles || []).filter(role => role && role !== primaryRole);
-      const activity_roles = [
-        ...(primaryRole ? [{ id: `ar-primary-${Date.now()}`, role_name: primaryRole, role_type: 'PRIMARY' }] : []),
-        ...supportRoles.map((roleName, idx) => ({ id: `ar-support-${Date.now()}-${idx}`, role_name: roleName, role_type: 'SUPPORT' })),
-      ];
+    const primaryRole = resolveRoleCode('', formData.role || '');
+    const primaryRoleId = roleIdByCode[primaryRole] || '';
+    const supportRoles = [...new Set((formData.support_roles || []).map(role => resolveRoleCode('', role)).filter(role => role && role !== primaryRole))];
+    const supportRoleIds = supportRoles.map(role => roleIdByCode[role] || '').filter(Boolean);
+    const baseRoleTimestamp = Date.now();
+    const activity_roles = [
+      ...(primaryRole ? [{
+        id: `ar-primary-${baseRoleTimestamp}`,
+        role_id: primaryRoleId,
+        role_name: primaryRole,
+        role_type: 'PRIMARY'
+      }] : []),
+      ...supportRoles.map((roleName, idx) => ({
+        id: `ar-support-${baseRoleTimestamp}-${idx}`,
+        role_id: roleIdByCode[roleName] || '',
+        role_name: roleName,
+        role_type: 'SUPPORT'
+      })),
+    ];
 
-      const newActivity = {
-        ...formData,
-        role: primaryRole,
-        activity_roles,
-        predecessors: preds,
-      };
-
-      if (isEditingActivity) {
-        const docId = isEditingActivity.toString();
-        const currentActivity = activities.find(activity => activity.id === isEditingActivity);
-        newActivity.id = parseInt(docId);
-        newActivity.activity_ref = currentActivity?.activity_ref || newActivity.activity_ref;
-        if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
-          newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
-        } else {
-          newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
-        }
-        await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
-      } else {
-        const phaseId = insertPhaseId || newActivity.phaseId;
-        const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
-        const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
-        const docId = nextId.toString();
-        await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
-          ...newActivity,
-          id: nextId,
-          phaseId,
-          order_index,
-          activity_ref: formatActivityRef(nextActivityRefCounter.current),
-        });
-        nextActivityRefCounter.current += 1;
-      }
-
-      resetForm();
-      showNotice('success', isEditingActivity ? 'Cambios guardados correctamente.' : 'Actividad creada correctamente.');
+    const newActivity = {
+      ...formData,
+      role: primaryRole,
+      primary_role_id: primaryRoleId,
+      support_roles: supportRoles,
+      support_role_ids: supportRoleIds,
+      activity_roles,
+      predecessors: preds,
     };
 
     if (isEditingActivity) {
-      setConfirmDialog({
-        isOpen: true,
-        title: 'Guardar cambios',
-        message: '¿Deseas guardar la modificacion de esta actividad?',
-        confirmLabel: 'Si, guardar',
-        confirmTone: 'primary',
-        onConfirm: async () => {
-          try {
-            await persistActivity();
-          } catch (error) {
-            handleWriteError(error, 'guardar la actividad');
-          } finally {
-            setConfirmDialog(DEFAULT_CONFIRM_DIALOG);
-          }
-        },
+      const docId = isEditingActivity.toString();
+      const currentActivity = activities.find(activity => activity.id === isEditingActivity);
+      newActivity.id = parseInt(docId);
+      newActivity.activity_ref = currentActivity?.activity_ref || newActivity.activity_ref;
+      if (currentActivity && currentActivity.phaseId !== newActivity.phaseId) {
+        newActivity.order_index = await calculateOrderIndex(newActivity.phaseId, null, isEditingActivity);
+      } else {
+        newActivity.order_index = currentActivity?.order_index ?? newActivity.order_index;
+      }
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), newActivity);
+    } else {
+      const phaseId = insertPhaseId || newActivity.phaseId;
+      const order_index = await calculateOrderIndex(phaseId, insertBeforeId, null);
+      const nextId = Math.max(0, ...activities.map(a => a.id)) + 1;
+      const docId = nextId.toString();
+      await setDoc(doc(db, getStageColPath(activeStage, 'activities'), docId), {
+        ...newActivity,
+        id: nextId,
+        phaseId,
+        order_index,
+        activity_ref: formatActivityRef(nextActivityRefCounter.current),
       });
-      return;
+      nextActivityRefCounter.current += 1;
     }
 
-    try {
-      await persistActivity();
-    } catch (error) {
-      handleWriteError(error, 'crear la actividad');
-    }
+    resetForm();
   };
 
   const startEdit = (activity) => {
@@ -1324,6 +1597,7 @@ export default function App() {
                 <span
                   className="text-[10px] px-2.5 py-0.5 rounded-full font-extrabold uppercase ring-1 ring-inset ring-white/60"
                   style={getRoleBadgeStyle(primaryRole)}
+                  title={getRoleFullName(primaryRole)}
                 >
                   {primaryRole}
                 </span>
@@ -1336,7 +1610,7 @@ export default function App() {
                   </p>
                 )}
                 {supportRoles.length > 0 && (
-                  <div className="mb-3 text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-md px-2 py-1">
+                  <div className="mb-3 text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-md px-2 py-1" title={supportRoles.map(roleCode => getRoleOptionLabel(roleCode)).join(' | ')}>
                     <span className="font-semibold text-slate-600">Support:</span> <span className="text-slate-400">{supportRoles.join(', ')}</span>
                   </div>
                 )}
@@ -1364,7 +1638,7 @@ export default function App() {
                   </div>
                   <h2 className="text-xl font-bold text-center text-slate-800 mb-2">Acceso Restringido</h2>
                   <p className="text-sm text-center text-slate-500 mb-4">Inicia sesión con tu correo institucional para acceder al editor.</p>
-                  <p className="text-[11px] text-center text-slate-400 mb-6">Solo usuarios admin (UID autorizado) pueden editar.</p>
+                  <p className="text-[11px] text-center text-slate-400 mb-6">Solo usuarios admin (UID/email autorizados) pueden editar.</p>
                   
                   <form onSubmit={handleLogin} className="space-y-4">
                       <div>
@@ -1394,21 +1668,25 @@ export default function App() {
           <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
               <div className="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-sm animate-fade-in-up">
                   <div className="flex items-center gap-3 mb-4">
-                      <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-red-600 flex-shrink-0">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${confirmDialog.confirmTone === 'danger' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
                           <AlertTriangle className="w-5 h-5" />
                       </div>
                       <h3 className="text-lg font-bold text-slate-800">{confirmDialog.title}</h3>
                   </div>
                   <p className="text-sm text-slate-600 mb-6">{confirmDialog.message}</p>
                   <div className="flex justify-end gap-3">
-                      <button onClick={() => setConfirmDialog(DEFAULT_CONFIRM_DIALOG)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200">Cancelar</button>
+                      <button onClick={closeConfirmDialog} disabled={confirmDialog.isSubmitting} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200 disabled:opacity-60 disabled:cursor-not-allowed">Cancelar</button>
                       <button
                         onClick={confirmDialog.onConfirm}
-                        className={`px-4 py-2 text-white rounded-lg font-bold shadow-lg ${confirmDialog.confirmTone === 'primary' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-red-600 hover:bg-red-700'}`}
+                        disabled={confirmDialog.isSubmitting}
+                        className={`px-4 py-2 text-white rounded-lg font-bold shadow-lg disabled:opacity-70 disabled:cursor-not-allowed ${confirmDialog.confirmTone === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                       >
-                        {confirmDialog.confirmLabel || 'Confirmar'}
+                        {confirmDialog.isSubmitting ? 'Guardando...' : (confirmDialog.confirmLabel || 'Confirmar')}
                       </button>
                   </div>
+                  {confirmDialog.error && (
+                    <p className="text-xs text-red-600 mt-3 font-medium">{confirmDialog.error}</p>
+                  )}
               </div>
           </div>
       )}
@@ -1472,9 +1750,9 @@ export default function App() {
                   </div>
                   <div className="flex items-center gap-1.5 px-2 py-1 bg-white rounded-lg border border-slate-200">
                     <Users className="w-4 h-4 text-purple-600" />
-                    <select value={tempFilters.role} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer py-0.5 pl-0 pr-6 w-28 sm:w-34 truncate hover:text-purple-600 transition-colors">
+                    <select value={safeTempRoleFilter} onChange={(e) => setTempFilters({...tempFilters, role: e.target.value})} className="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer py-0.5 pl-0 pr-6 w-28 sm:w-34 truncate hover:text-purple-600 transition-colors">
                       <option value="all">Todos los Roles</option>
-                      {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
+                      {availableRoles.map(roleCode => <option key={roleCode} value={roleCode}>{getRoleOptionLabel(roleCode)}</option>)}
                     </select>
                   </div>
                   {activeTab === 'diagram_list' && (
@@ -1487,7 +1765,42 @@ export default function App() {
                       />
                     </div>
                   )}
-                  <div className="flex gap-1 ml-auto">
+                  <div className="ml-auto flex items-center gap-1">
+                    {roles.length > 0 && (
+                      <div ref={roleLegendRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowRoleLegend(current => !current)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:border-slate-300"
+                        >
+                          <Info className="w-3 h-3 text-blue-600" />
+                          <span>Convenciones</span>
+                          <span className="text-slate-400">{showRoleLegend ? 'Ocultar' : 'Ver'}</span>
+                        </button>
+                        {showRoleLegend && (
+                          <div className="absolute right-0 top-[calc(100%+6px)] z-50 w-72 max-w-[calc(100vw-2.5rem)] rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                            <div className="grid grid-cols-[84px_1fr] gap-2 px-1 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                              <span>Convención</span>
+                              <span>Nombre</span>
+                            </div>
+                            <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
+                              {roles.map(role => (
+                                <div key={`legend-${role.id}`} className="grid grid-cols-[84px_1fr] items-center gap-2 text-[11px]">
+                                  <span
+                                    className="inline-flex w-fit max-w-full truncate px-2 py-0.5 rounded-md font-extrabold uppercase"
+                                    style={getRoleBadgeStyle(role.code)}
+                                    title={role.name}
+                                  >
+                                    {role.code}
+                                  </span>
+                                  <span className="text-slate-600 font-medium truncate" title={role.name}>{role.name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <button onClick={applyFilters} className="bg-slate-900 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold hover:bg-black shadow-sm transition-transform active:scale-95">Filtrar</button>
                     <button onClick={clearFilters} className="bg-white text-slate-500 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-semibold hover:text-red-600 hover:border-red-200 shadow-sm transition-transform active:scale-95"><RotateCcw className="w-3 h-3" /></button>
                   </div>
@@ -1500,14 +1813,6 @@ export default function App() {
 
       {/* MAIN */}
       <main className="flex-1 overflow-hidden relative flex bg-slate-50">
-        {statusNotice.message && (
-          <div className={`absolute top-3 left-3 right-3 z-[120] border rounded-xl px-4 py-3 text-sm font-medium shadow ${statusNotice.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
-            <div className="flex items-start justify-between gap-4">
-              <span>{statusNotice.message}</span>
-              <button onClick={clearNotice} className="text-xs px-2 py-1 rounded-md border border-current/30 hover:bg-white/50">Cerrar</button>
-            </div>
-          </div>
-        )}
         
         {/* DIAGRAMA NODOS */}
         {activeTab === 'diagram_node' && (
@@ -1593,6 +1898,7 @@ export default function App() {
                                                         <span
                                                           className="text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider"
                                                           style={getRoleBadgeStyle(primaryRoleName || '')}
+                                                          title={getRoleFullName(primaryRoleName || '')}
                                                         >
                                                             {primaryRoleName || 'Sin rol'}
                                                         </span>
@@ -1622,11 +1928,12 @@ export default function App() {
                                                       <span
                                                         className="text-[10px] px-2 py-1 rounded-md font-bold uppercase"
                                                         style={getRoleBadgeStyle(primaryRoleName || '')}
+                                                        title={getRoleFullName(primaryRoleName || '')}
                                                       >
                                                         Primary: {primaryRoleName || 'No definido'}
                                                       </span>
                                                       {supportRoleNames.map(role => (
-                                                        <span key={`${act.id}-${role}`} className="text-[10px] px-2 py-1 rounded-md font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                                                        <span key={`${act.id}-${role}`} className="text-[10px] px-2 py-1 rounded-md font-medium bg-slate-100 text-slate-500 border border-slate-200" title={getRoleFullName(role)}>
                                                           Support: {role}
                                                         </span>
                                                       ))}
@@ -1684,19 +1991,33 @@ export default function App() {
                 {managementMode === 'phases' && (
                   <div className="space-y-3">
                     {phases.map((phase) => {
-                      const phaseColor = getPhaseHexColor(phase);
+                      const draft = phaseDrafts[phase.id] || { title: phase.title || '', color: getPhaseHexColor(phase) };
+                      const phaseColor = draft.color || getPhaseHexColor(phase);
                       return (
                       <div key={phase.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-slate-200 flex-shrink-0 cursor-pointer relative shadow-inner">
                             <input 
                                 type="color" 
                                 value={phaseColor} 
-                                onChange={(e) => updatePhaseColor(phase.id, e.target.value)}
+                                onChange={(e) => setPhaseDrafts(current => ({
+                                  ...current,
+                                  [phase.id]: { ...(current[phase.id] || { title: phase.title || '', color: getPhaseHexColor(phase) }), color: e.target.value }
+                                }))}
                                 className="absolute -top-2 -left-2 w-12 h-12 cursor-pointer"
                                 title="Cambiar color de la fase"
                             />
                         </div>
-                        <input className="flex-1 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500" value={phase.title} onChange={(e) => updatePhaseTitle(phase.id, e.target.value)} />
+                        <input
+                          className="flex-1 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500"
+                          value={draft.title}
+                          onChange={(e) => setPhaseDrafts(current => ({
+                            ...current,
+                            [phase.id]: { ...(current[phase.id] || { title: phase.title || '', color: getPhaseHexColor(phase) }), title: e.target.value }
+                          }))}
+                        />
+                        <button type="button" onClick={() => movePhaseByStep(phase.id, 'up')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={phases[0]?.id === phase.id} title="Mover arriba"><ChevronUp className="w-4 h-4"/></button>
+                        <button type="button" onClick={() => movePhaseByStep(phase.id, 'down')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={phases[phases.length - 1]?.id === phase.id} title="Mover abajo"><ChevronDown className="w-4 h-4"/></button>
+                        <button type="button" onClick={() => savePhaseDraft(phase.id)} className="text-slate-300 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded" title="Guardar cambios de la fase"><Save className="w-4 h-4"/></button>
                         <button type="button" onClick={() => requestDeletePhase(phase.id)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                       </div>
                     )})}
@@ -1705,45 +2026,90 @@ export default function App() {
                 )}
                 {managementMode === 'flows' && (
                   <div className="space-y-3">
-                    {flows.map((flow) => (
+                    {flows.map((flow) => {
+                      const draft = flowDrafts[flow.id] || { label: flow.label || '', color: flow.color || '#64748b' };
+                      return (
                       <div key={flow.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-2">
-                         <div className="w-3 h-3 rounded-full" style={{backgroundColor: flow.color || '#ccc'}}></div>
-                         <input className="flex-1 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500" value={flow.label} onChange={(e) => updateFlowLabel(flow.id, e.target.value)} />
+                         <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-slate-200 flex-shrink-0 cursor-pointer relative shadow-inner">
+                            <input
+                              type="color"
+                              value={draft.color}
+                              onChange={(e) => setFlowDrafts(current => ({
+                                ...current,
+                                [flow.id]: { ...(current[flow.id] || { label: flow.label || '', color: flow.color || '#64748b' }), color: e.target.value }
+                              }))}
+                              className="absolute -top-2 -left-2 w-12 h-12 cursor-pointer"
+                              title="Cambiar color de la ruta"
+                            />
+                         </div>
+                         <input
+                           className="flex-1 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500"
+                           value={draft.label}
+                           onChange={(e) => setFlowDrafts(current => ({
+                             ...current,
+                             [flow.id]: { ...(current[flow.id] || { label: flow.label || '', color: flow.color || '#64748b' }), label: e.target.value }
+                           }))}
+                         />
+                         <button type="button" onClick={() => moveFlowByStep(flow.id, 'up')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={flows[0]?.id === flow.id} title="Mover arriba"><ChevronUp className="w-4 h-4"/></button>
+                         <button type="button" onClick={() => moveFlowByStep(flow.id, 'down')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={flows[flows.length - 1]?.id === flow.id} title="Mover abajo"><ChevronDown className="w-4 h-4"/></button>
+                         <button type="button" onClick={() => saveFlowDraft(flow.id)} className="text-slate-300 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded" title="Guardar cambios de la ruta"><Save className="w-4 h-4"/></button>
                          <button type="button" onClick={() => requestDeleteFlow(flow.id)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                       </div>
-                    ))}
+                    )})}
                     <button onClick={addFlow} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-400 font-bold text-sm hover:border-blue-400 hover:text-blue-600 flex justify-center gap-2 transition-colors"><Plus className="w-4 h-4"/> Nueva Ruta</button>
                   </div>
                 )}
                 {managementMode === 'roles' && (
                   <div className="space-y-3">
+                    <div className="grid grid-cols-[96px_1fr] gap-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <span>Convencion</span>
+                      <span>Nombre completo</span>
+                    </div>
                     {roles.map((role) => {
-                      const draftValue = roleDrafts[role.id] ?? role.name;
+                      const draft = roleDrafts[role.id] || { name: role.name, code: role.code, color: role.color };
+                      const duplicatedCode = roles.some(currentRole => currentRole.id !== role.id && currentRole.code === draft.code);
                       return (
-                        <div key={role.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-3">
+                        <div key={role.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                          <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-slate-200 flex-shrink-0 cursor-pointer relative shadow-inner">
                             <input
                               type="color"
-                              value={role.color}
-                              onChange={(e) => updateRoleColor(role.id, e.target.value)}
+                              value={draft.color}
+                              onChange={(e) => setRoleDrafts(current => ({
+                                ...current,
+                                [role.id]: { ...(current[role.id] || { name: role.name, code: role.code, color: role.color }), color: e.target.value }
+                              }))}
                               className="absolute -top-2 -left-2 w-12 h-12 cursor-pointer"
                               title="Cambiar color del rol"
                             />
                           </div>
                           <input
-                            className="flex-1 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500"
-                            value={draftValue}
-                            onChange={(e) => setRoleDrafts(current => ({ ...current, [role.id]: e.target.value }))}
-                            onBlur={() => commitRoleRename(role, draftValue)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                e.currentTarget.blur();
-                              }
-                            }}
+                            className="w-24 text-sm font-bold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500"
+                            value={draft.code}
+                            onChange={(e) => setRoleDrafts(current => ({
+                              ...current,
+                              [role.id]: { ...(current[role.id] || { name: role.name, code: role.code, color: role.color }), code: e.target.value.toUpperCase() }
+                            }))}
+                            placeholder="Sigla"
                           />
+                          <input
+                            className="flex-1 text-sm font-semibold text-slate-700 bg-transparent focus:outline-none focus:border-b focus:border-blue-500"
+                            value={draft.name}
+                            onChange={(e) => setRoleDrafts(current => ({
+                              ...current,
+                              [role.id]: { ...(current[role.id] || { name: role.name, code: role.code, color: role.color }), name: e.target.value }
+                            }))}
+                            placeholder="Nombre completo del rol"
+                          />
+                          <button type="button" onClick={() => saveRoleDraft(role)} className="text-slate-300 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded" title="Guardar rol"><Save className="w-4 h-4"/></button>
                           <button type="button" onClick={() => requestDeleteRole(role)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                         </div>
+                        {duplicatedCode && (
+                          <p className="mt-2 text-[11px] text-red-600 font-semibold">
+                            La convención "{draft.code}" ya existe. Usa una sigla única.
+                          </p>
+                        )}
+                      </div>
                       );
                     })}
                     <button onClick={addRole} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-lg text-slate-400 font-bold text-sm hover:border-blue-400 hover:text-blue-600 flex justify-center gap-2 transition-colors"><Plus className="w-4 h-4"/> Nuevo Rol</button>
@@ -1967,7 +2333,7 @@ export default function App() {
                           if (nextValue) clearFormError('role');
                         }}>
                             <option value="">Seleccionar...</option>
-                            {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
+                            {availableRoles.map(roleCode => <option key={roleCode} value={roleCode}>{getRoleOptionLabel(roleCode)}</option>)}
                         </select>
                         {formErrors.role && <p className="mt-1 text-[11px] text-red-600 font-semibold">{formErrors.role}</p>}
                       </div>
@@ -1975,7 +2341,7 @@ export default function App() {
                         <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Roles de Soporte</label>
                         <div className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-slate-50 max-h-28 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {availableRoles.filter(role => role !== formData.role).map(role => (
-                            <label key={role} className="flex items-center gap-2 text-slate-600">
+                            <label key={role} className="flex items-center gap-2 text-slate-600" title={getRoleFullName(role)}>
                               <input
                                 type="checkbox"
                                 checked={(formData.support_roles || []).includes(role)}
@@ -1985,7 +2351,7 @@ export default function App() {
                                   setFormData({ ...formData, support_roles });
                                 }}
                               />
-                              {role}
+                              {getRoleOptionLabel(role)}
                             </label>
                           ))}
                         </div>

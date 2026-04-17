@@ -9,9 +9,9 @@ service cloud.firestore {
       return isSignedIn() && (
         request.auth.token.admin == true ||
         request.auth.uid in [
-          // Reemplaza estos valores por UIDs reales de administradores.
-          "Hd0fliPDxIR0NDL2BYZqjFtTok53",
-          "3VTYUmCkqNU3g2U8qvDdUzChuK13"
+          // UIDs reales de administradores.
+          "3VTYUmCkqNU3g2U8qvDdUzChuK13",
+          "Hd0fliPDxIR0NDL2BYZqjFtTok53"
         ]
       );
     }
@@ -33,28 +33,31 @@ service cloud.firestore {
     }
 
     function isValidRoleDoc(data, roleId) {
-      return data.keys().hasOnly(["id", "name", "color", "textColor"]) &&
+      return data.keys().hasOnly(["id", "name", "code", "color", "textColor"]) &&
         data.keys().hasAll(["id", "name", "color", "textColor"]) &&
         data.id == roleId &&
         isSafeText(data.name, 60) &&
+        (!("code" in data) || isSafeText(data.code, 30)) &&
         isHexColor(data.color) &&
         isHexColor(data.textColor);
     }
 
     function isValidPhaseDoc(data, phaseId) {
-      return data.keys().hasOnly(["id", "title", "color"]) &&
+      return data.keys().hasOnly(["id", "title", "color", "order_index"]) &&
         data.keys().hasAll(["id", "title", "color"]) &&
         data.id == phaseId &&
         isSafeText(data.title, 120) &&
-        isHexColor(data.color);
+        isHexColor(data.color) &&
+        (!("order_index" in data) || data.order_index is number);
     }
 
     function isValidFlowDoc(data, flowId) {
-      return data.keys().hasOnly(["id", "label", "color"]) &&
+      return data.keys().hasOnly(["id", "label", "color", "order_index"]) &&
         data.keys().hasAll(["id", "label", "color"]) &&
         data.id == flowId &&
         isSafeText(data.label, 120) &&
-        isHexColor(data.color);
+        isHexColor(data.color) &&
+        (!("order_index" in data) || data.order_index is number);
     }
 
     function isValidActivityDoc(data) {
@@ -72,6 +75,8 @@ service cloud.firestore {
           "origin",
           "condition",
           "activity_roles",
+          "primary_role_id",
+          "support_role_ids",
           "order_index",
           "activity_ref"
         ]) &&
@@ -107,7 +112,9 @@ service cloud.firestore {
         (!("origin" in data) || isBoundedText(data.origin, 120)) &&
         (!("condition" in data) || isBoundedText(data.condition, 160)) &&
         (!("support_roles" in data) || (data.support_roles is list && data.support_roles.size() <= 30)) &&
-        (!("activity_roles" in data) || (data.activity_roles is list && data.activity_roles.size() <= 30));
+        (!("activity_roles" in data) || (data.activity_roles is list && data.activity_roles.size() <= 30)) &&
+        (!("primary_role_id" in data) || isBoundedText(data.primary_role_id, 120)) &&
+        (!("support_role_ids" in data) || (data.support_role_ids is list && data.support_role_ids.size() <= 30));
     }
 
     match /artifacts/mapa-cecp-app/public/data/roles/{roleId} {
