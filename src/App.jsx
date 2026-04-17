@@ -142,6 +142,8 @@ export default function App() {
     error: '',
     onConfirm: null
   });
+  const [toast, setToast] = useState({ visible: false, type: 'success', message: '' });
+  const [saveStatusByKey, setSaveStatusByKey] = useState({});
   const [tempFilters, setTempFilters] = useState({ flow: 'all', role: 'all' });
   const [activeFilters, setActiveFilters] = useState({ flow: 'all', role: 'all' });
   const [tempSearch, setTempSearch] = useState('');
@@ -157,6 +159,8 @@ export default function App() {
   const containerRef = useRef(null);
   const roleLegendRef = useRef(null);
   const nextActivityRefCounter = useRef(1);
+  const toastTimeoutRef = useRef(null);
+  const saveStatusTimeoutsRef = useRef({});
 
   // Estados de Edición
   const [isEditingActivity, setIsEditingActivity] = useState(null);
@@ -297,6 +301,32 @@ export default function App() {
   }, [getRoleFullName]);
   const getPrimaryRoleName = useCallback((activity) => getActivityRoles(activity).find(role => role.role_type === 'PRIMARY')?.role_name || resolveRoleCode(activity.primary_role_id, activity.role || ''), [getActivityRoles, resolveRoleCode]);
   const getSupportRoleNames = useCallback((activity) => getActivityRoles(activity).filter(role => role.role_type === 'SUPPORT').map(role => role.role_name), [getActivityRoles]);
+  const showToast = useCallback((type, message) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast({ visible: true, type, message });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(current => ({ ...current, visible: false }));
+    }, 3200);
+  }, []);
+  const setEntitySaveStatus = useCallback((entityKey, status, message = '') => {
+    setSaveStatusByKey(current => ({
+      ...current,
+      [entityKey]: { status, message, updatedAt: Date.now() },
+    }));
+    if (saveStatusTimeoutsRef.current[entityKey]) {
+      clearTimeout(saveStatusTimeoutsRef.current[entityKey]);
+      delete saveStatusTimeoutsRef.current[entityKey];
+    }
+    if (status === 'saved') {
+      saveStatusTimeoutsRef.current[entityKey] = setTimeout(() => {
+        setSaveStatusByKey(current => {
+          const next = { ...current };
+          delete next[entityKey];
+          return next;
+        });
+      }, 2600);
+    }
+  }, []);
   const normalizeActivityModel = useCallback((activity) => {
     const normalizedRoles = getActivityRoles(activity);
     const primary = normalizedRoles.find(role => role.role_type === 'PRIMARY');
@@ -310,6 +340,11 @@ export default function App() {
       activity_roles: normalizedRoles,
     };
   }, [getActivityRoles]);
+
+  useEffect(() => () => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    Object.values(saveStatusTimeoutsRef.current).forEach(timeoutId => clearTimeout(timeoutId));
+  }, []);
 
   const getTargetKey = (targetId, phaseId) => (targetId === null ? `end:${phaseId}` : `before:${targetId}`);
   const displayOrderByActivityId = useMemo(() => {
@@ -892,7 +927,7 @@ export default function App() {
   }, [showRoleLegend]);
 
   // --- CRUD A FIREBASE (Guardado en Tiempo Real) ---
-  const getConfirmErrorMessage = (error) => {
+  const getConfirmErrorMessage = useCallback((error) => {
     if (!error) return 'No se pudo completar la operación.';
     if (error?.code === 'permission-denied' || error?.code === 'firestore/permission-denied') {
       return 'Firestore rechazó la operación por permisos. Verifica que tu UID admin esté en firestore.rules y despliega reglas.';
@@ -901,7 +936,7 @@ export default function App() {
       return 'Firestore no está disponible en este momento. Intenta de nuevo en unos segundos.';
     }
     return error?.message || 'No se pudo completar la operación.';
-  };
+  }, []);
 
   const closeConfirmDialog = () => {
     setConfirmDialog(current => ({
@@ -912,7 +947,7 @@ export default function App() {
     }));
   };
 
-  const openConfirmDialog = ({ title, message, confirmLabel = 'Confirmar', confirmTone = 'primary', onConfirm }) => {
+  const openConfirmDialog = ({ title, message, confirmLabel = 'Confirmar', confirmTone = 'primary', successMessage = '', onConfirm }) => {
     setConfirmDialog({
       isOpen: true,
       title,
@@ -926,6 +961,7 @@ export default function App() {
         try {
           await onConfirm?.();
           closeConfirmDialog();
+          if (successMessage) showToast('success', successMessage);
         } catch (error) {
           console.error(error);
           setConfirmDialog(current => ({
@@ -944,6 +980,7 @@ export default function App() {
         message: `¿Estás seguro de que deseas eliminar la actividad #${id}?`,
         confirmLabel: 'Sí, eliminar',
         confirmTone: 'danger',
+        successMessage: `Actividad #${id} eliminada.`,
         onConfirm: async () => {
           await deleteDoc(doc(db, getStageColPath(activeStage, 'activities'), id.toString()));
           const batch = writeBatch(db);
@@ -960,11 +997,14 @@ export default function App() {
   };
 
   const requestDeletePhase = (id) => {
+      const impactedActivities = activities.filter(activity => activity.phaseId === id).length;
+      const phaseTitle = phases.find(phase => phase.id === id)?.title || id;
       openConfirmDialog({
         title: 'Eliminar Fase Completa',
-        message: '¡Atención! Al borrar esta fase, también se eliminarán TODAS las actividades que pertenecen a ella.',
+        message: `Se eliminará la fase "${phaseTitle}" y ${impactedActivities} actividad(es) de esta etapa.`,
         confirmLabel: 'Sí, eliminar',
         confirmTone: 'danger',
+        successMessage: `Fase "${phaseTitle}" eliminada junto con ${impactedActivities} actividad(es).`,
         onConfirm: async () => {
           const batch = writeBatch(db);
           batch.delete(doc(db, getStageColPath(activeStage, 'phases'), id));
@@ -977,11 +1017,14 @@ export default function App() {
   };
 
   const requestDeleteFlow = (id) => {
+      const impactedActivities = activities.filter(activity => Array.isArray(activity.flows) && activity.flows.includes(id)).length;
+      const flowLabel = flows.find(flow => flow.id === id)?.label || id;
       openConfirmDialog({
         title: 'Eliminar Ruta',
-        message: '¿Borrar esta ruta? Las actividades seguirán existiendo, pero perderán su asignación a este flujo.',
+        message: `La ruta "${flowLabel}" se eliminará y ${impactedActivities} actividad(es) perderán esta asignación.`,
         confirmLabel: 'Sí, eliminar',
         confirmTone: 'danger',
+        successMessage: `Ruta "${flowLabel}" eliminada. ${impactedActivities} actividad(es) actualizadas.`,
         onConfirm: async () => {
           const batch = writeBatch(db);
           batch.delete(doc(db, getStageColPath(activeStage, 'flows'), id));
@@ -1022,6 +1065,7 @@ export default function App() {
       title: 'Reordenar Fase',
       message: `¿Mover "${currentPhase.title}" ${direction === 'up' ? 'arriba' : 'abajo'}?`,
       confirmLabel: 'Sí, mover',
+      successMessage: `Fase "${currentPhase.title}" reordenada.`,
       onConfirm: async () => {
         await swapOrderIndex('phases', currentPhase, targetPhase);
       }
@@ -1039,6 +1083,7 @@ export default function App() {
       title: 'Reordenar Ruta',
       message: `¿Mover "${currentFlow.label}" ${direction === 'up' ? 'arriba' : 'abajo'}?`,
       confirmLabel: 'Sí, mover',
+      successMessage: `Ruta "${currentFlow.label}" reordenada.`,
       onConfirm: async () => {
         await swapOrderIndex('flows', currentFlow, targetFlow);
       }
@@ -1051,6 +1096,7 @@ export default function App() {
       title: 'Crear Fase',
       message: '¿Crear una nueva fase al final de la etapa actual?',
       confirmLabel: 'Sí, crear',
+      successMessage: 'Nueva fase creada.',
       onConfirm: async () => {
         const newId = `p${Date.now()}`;
         const newPhase = { id: newId, title: 'Nueva Fase', color: '#3b82f6', order_index: nextOrder };
@@ -1065,6 +1111,7 @@ export default function App() {
       title: 'Crear Ruta',
       message: '¿Crear una nueva ruta al final de la etapa actual?',
       confirmLabel: 'Sí, crear',
+      successMessage: 'Nueva ruta creada.',
       onConfirm: async () => {
         const newId = `ruta_${Date.now()}`;
         const newFlow = { id: newId, label: 'Nueva Ruta', color: '#64748b', order_index: nextOrder };
@@ -1073,45 +1120,99 @@ export default function App() {
     });
   };
 
-  const savePhaseDraft = async (phaseId) => {
+  const getPhaseDraftPayload = useCallback((phaseId) => {
     const phase = phases.find(current => current.id === phaseId);
     const draft = phaseDrafts[phaseId];
-    if (!phase || !draft) return;
+    if (!phase || !draft) return null;
     const title = (draft.title || '').trim();
     const color = draft.color || getPhaseHexColor(phase);
-    if (!title) return;
+    if (!title) return null;
     const changed = title !== (phase.title || '') || color !== getPhaseHexColor(phase);
-    if (!changed) return;
-    openConfirmDialog({
-      title: 'Guardar Fase',
-      message: `¿Guardar cambios en la fase "${phase.title}"?`,
-      confirmLabel: 'Sí, guardar',
-      onConfirm: async () => {
-        await setDoc(doc(db, getStageColPath(activeStage, 'phases'), phaseId), { title, color }, { merge: true });
-      }
-    });
-  };
+    if (!changed) return null;
+    return { title, color };
+  }, [phaseDrafts, phases]);
 
-  const saveFlowDraft = async (flowId) => {
+  const getFlowDraftPayload = useCallback((flowId) => {
     const flow = flows.find(current => current.id === flowId);
     const draft = flowDrafts[flowId];
-    if (!flow || !draft) return;
+    if (!flow || !draft) return null;
     const label = (draft.label || '').trim();
     const color = draft.color || flow.color || '#64748b';
-    if (!label) return;
+    if (!label) return null;
     const changed = label !== (flow.label || '') || color !== (flow.color || '#64748b');
-    if (!changed) return;
-    openConfirmDialog({
-      title: 'Guardar Ruta',
-      message: `¿Guardar cambios en la ruta "${flow.label}"?`,
-      confirmLabel: 'Sí, guardar',
-      onConfirm: async () => {
-        await setDoc(doc(db, getStageColPath(activeStage, 'flows'), flowId), { label, color }, { merge: true });
-      }
-    });
-  };
+    if (!changed) return null;
+    return { label, color };
+  }, [flowDrafts, flows]);
 
-  const commitActivityRoleUpdates = async (updates) => {
+  const getRoleDraftPayload = useCallback((role) => {
+    const draft = roleDrafts[role.id] || { name: role.name, code: role.code, color: role.color };
+    const nextName = (draft.name || '').trim();
+    const nextCode = (draft.code || '').trim();
+    const nextColor = draft.color || role.color;
+    if (!nextName || !nextCode) return null;
+    const duplicatedCode = roles.some(currentRole => currentRole.id !== role.id && currentRole.code === nextCode);
+    if (duplicatedCode) return { duplicatedCode: true, nextCode };
+    const changed = nextName !== role.name || nextCode !== role.code || nextColor !== role.color;
+    if (!changed) return null;
+    return { duplicatedCode: false, nextName, nextCode, nextColor };
+  }, [roleDrafts, roles]);
+
+  const isPhaseDirty = useCallback((phaseId) => Boolean(getPhaseDraftPayload(phaseId)), [getPhaseDraftPayload]);
+  const isFlowDirty = useCallback((flowId) => Boolean(getFlowDraftPayload(flowId)), [getFlowDraftPayload]);
+  const isRoleDirty = useCallback((role) => {
+    const payload = getRoleDraftPayload(role);
+    return Boolean(payload && !payload.duplicatedCode);
+  }, [getRoleDraftPayload]);
+  const getEntityStatusMeta = useCallback((entityKey, isDirty) => {
+    const status = saveStatusByKey[entityKey]?.status;
+    if (status === 'saving') return { label: 'Guardando...', className: 'text-blue-600 bg-blue-50 border-blue-200' };
+    if (status === 'error') return { label: 'Error', className: 'text-red-600 bg-red-50 border-red-200' };
+    if (isDirty) return { label: 'Pendiente', className: 'text-amber-600 bg-amber-50 border-amber-200' };
+    if (status === 'saved') return { label: 'Guardado', className: 'text-emerald-600 bg-emerald-50 border-emerald-200' };
+    return null;
+  }, [saveStatusByKey]);
+
+  const persistPhaseDraft = useCallback(async (phaseId, { source = 'manual', notifySuccess = true } = {}) => {
+    const payload = getPhaseDraftPayload(phaseId);
+    if (!payload) return false;
+    const statusKey = `phase:${phaseId}`;
+    try {
+      setEntitySaveStatus(statusKey, 'saving');
+      await setDoc(doc(db, getStageColPath(activeStage, 'phases'), phaseId), { title: payload.title, color: payload.color }, { merge: true });
+      setEntitySaveStatus(statusKey, 'saved');
+      if (notifySuccess) {
+        showToast('success', source === 'autosave'
+          ? `Fase "${payload.title}" guardada automáticamente.`
+          : `Fase "${payload.title}" guardada.`);
+      }
+      return true;
+    } catch (error) {
+      setEntitySaveStatus(statusKey, 'error', getConfirmErrorMessage(error));
+      throw error;
+    }
+  }, [activeStage, getConfirmErrorMessage, getPhaseDraftPayload, setEntitySaveStatus, showToast]);
+
+  const persistFlowDraft = useCallback(async (flowId, { source = 'manual', notifySuccess = true } = {}) => {
+    const payload = getFlowDraftPayload(flowId);
+    if (!payload) return false;
+    const statusKey = `flow:${flowId}`;
+    try {
+      setEntitySaveStatus(statusKey, 'saving');
+      await setDoc(doc(db, getStageColPath(activeStage, 'flows'), flowId), { label: payload.label, color: payload.color }, { merge: true });
+      setEntitySaveStatus(statusKey, 'saved');
+      if (notifySuccess) {
+        showToast('success', source === 'autosave'
+          ? `Ruta "${payload.label}" guardada automáticamente.`
+          : `Ruta "${payload.label}" guardada.`);
+      }
+      return true;
+    } catch (error) {
+      setEntitySaveStatus(statusKey, 'error', getConfirmErrorMessage(error));
+      throw error;
+    }
+  }, [activeStage, getConfirmErrorMessage, getFlowDraftPayload, setEntitySaveStatus, showToast]);
+
+  const commitActivityRoleUpdates = useCallback(async (updates) => {
     const chunks = [];
     for (let i = 0; i < updates.length; i += 450) {
       chunks.push(updates.slice(i, i + 450));
@@ -1123,9 +1224,9 @@ export default function App() {
       });
       await batch.commit();
     }
-  };
+  }, []);
 
-  const syncRoleAcrossStages = async (roleId, oldCode, newCode) => {
+  const syncRoleAcrossStages = useCallback(async (roleId, oldCode, newCode) => {
     if (!roleId || !newCode) return;
     const updates = [];
     for (const stage of processStages) {
@@ -1184,9 +1285,9 @@ export default function App() {
       });
     }
     if (updates.length > 0) await commitActivityRoleUpdates(updates);
-  };
+  }, [commitActivityRoleUpdates, resolveRoleCode]);
 
-  const removeRoleAcrossStages = async (roleId, roleCode) => {
+  const removeRoleAcrossStages = useCallback(async (roleId, roleCode) => {
     if (!roleId && !roleCode) return;
     const updates = [];
     for (const stage of processStages) {
@@ -1233,7 +1334,31 @@ export default function App() {
       });
     }
     if (updates.length > 0) await commitActivityRoleUpdates(updates);
-  };
+  }, [commitActivityRoleUpdates, resolveRoleCode]);
+
+  const isRoleUsedInActivity = useCallback((activity, roleId, roleCode) => {
+    const currentPrimaryRole = resolveRoleCode(activity.primary_role_id || '', activity.role || '');
+    if ((roleId && activity.primary_role_id === roleId) || (roleCode && currentPrimaryRole === roleCode)) return true;
+    if (Array.isArray(activity.support_role_ids) && roleId && activity.support_role_ids.includes(roleId)) return true;
+    if (Array.isArray(activity.support_roles) && roleCode && activity.support_roles.includes(roleCode)) return true;
+    if (Array.isArray(activity.activity_roles)) {
+      return activity.activity_roles.some(currentRole => (
+        (roleId && currentRole.role_id === roleId) || (roleCode && currentRole.role_name === roleCode)
+      ));
+    }
+    return false;
+  }, [resolveRoleCode]);
+
+  const countRoleUsageAcrossStages = useCallback(async (roleId, roleCode) => {
+    let total = 0;
+    for (const stage of processStages) {
+      const snapshot = await getDocs(collection(db, getStageColPath(stage.id, 'activities')));
+      snapshot.forEach((activityDoc) => {
+        if (isRoleUsedInActivity(activityDoc.data(), roleId, roleCode)) total += 1;
+      });
+    }
+    return total;
+  }, [isRoleUsedInActivity]);
 
   const addRole = async () => {
     const palette = rolePalette[roles.length % rolePalette.length];
@@ -1241,6 +1366,7 @@ export default function App() {
       title: 'Crear Rol',
       message: '¿Crear un nuevo rol disponible para todas las etapas?',
       confirmLabel: 'Sí, crear',
+      successMessage: 'Nuevo rol creado.',
       onConfirm: async () => {
         const defaultCode = `ROL${roles.length + 1}`;
         const newRole = {
@@ -1255,18 +1381,41 @@ export default function App() {
     });
   };
 
-  const saveRoleDraft = async (role) => {
-    const draft = roleDrafts[role.id] || { name: role.name, code: role.code, color: role.color };
-    const nextName = (draft.name || '').trim();
-    const nextCode = (draft.code || '').trim();
-    const nextColor = draft.color || role.color;
-    if (!nextName || !nextCode) return;
+  const persistRoleDraft = useCallback(async (role, payload, { source = 'manual', notifySuccess = true } = {}) => {
+    const statusKey = `role:${role.id}`;
+    try {
+      setEntitySaveStatus(statusKey, 'saving');
+      await setDoc(
+        doc(db, getRolesColPath(), role.id),
+        { name: payload.nextName, code: payload.nextCode, color: payload.nextColor, textColor: getReadableTextColor(payload.nextColor) },
+        { merge: true }
+      );
+      if (payload.nextCode !== role.code) {
+        await syncRoleAcrossStages(role.id, role.code, payload.nextCode);
+      }
+      setEntitySaveStatus(statusKey, 'saved');
+      if (notifySuccess) {
+        showToast('success', source === 'autosave'
+          ? `Rol "${payload.nextCode}" guardado automáticamente.`
+          : `Rol "${payload.nextCode}" guardado.`);
+      }
+      return true;
+    } catch (error) {
+      setEntitySaveStatus(statusKey, 'error', getConfirmErrorMessage(error));
+      throw error;
+    }
+  }, [getConfirmErrorMessage, setEntitySaveStatus, showToast, syncRoleAcrossStages]);
 
-    const duplicatedCode = roles.some(currentRole => currentRole.id !== role.id && currentRole.code === nextCode);
-    if (duplicatedCode) {
+  const saveRoleDraft = async (role) => {
+    const payload = getRoleDraftPayload(role);
+    if (!payload) return;
+    const statusKey = `role:${role.id}`;
+
+    if (payload.duplicatedCode) {
+      setEntitySaveStatus(statusKey, 'error', `Convención duplicada: ${payload.nextCode}`);
       openConfirmDialog({
         title: 'Convención Duplicada',
-        message: `La convención "${nextCode}" ya está en uso. Debe ser única para evitar ambigüedades.`,
+        message: `La convención "${payload.nextCode}" ya está en uso. Debe ser única para evitar ambigüedades.`,
         confirmLabel: 'Entendido',
         confirmTone: 'danger',
         onConfirm: async () => {}
@@ -1274,38 +1423,138 @@ export default function App() {
       return;
     }
 
-    const changed = nextName !== role.name || nextCode !== role.code || nextColor !== role.color;
-    if (!changed) return;
+    let impactMessage = `¿Guardar cambios en el rol "${role.code}"?`;
+    if (payload.nextCode !== role.code) {
+      try {
+        const impactedActivities = await countRoleUsageAcrossStages(role.id, role.code);
+        impactMessage = `¿Guardar cambios en el rol "${role.code}"? Se actualizarán ${impactedActivities} actividad(es) vinculadas en todas las etapas.`;
+      } catch (error) {
+        showToast('error', `No se pudo calcular el impacto del rol: ${getConfirmErrorMessage(error)}`);
+        return;
+      }
+    }
 
     openConfirmDialog({
       title: 'Guardar Rol',
-      message: `¿Guardar cambios en el rol "${role.code}"?`,
+      message: impactMessage,
       confirmLabel: 'Sí, guardar',
+      successMessage: `Rol "${payload.nextCode}" actualizado.`,
       onConfirm: async () => {
-        await setDoc(
-          doc(db, getRolesColPath(), role.id),
-          { name: nextName, code: nextCode, color: nextColor, textColor: getReadableTextColor(nextColor) },
-          { merge: true }
-        );
-        if (nextCode !== role.code) {
-          await syncRoleAcrossStages(role.id, role.code, nextCode);
-        }
+        await persistRoleDraft(role, payload, { source: 'manual', notifySuccess: false });
       }
     });
   };
 
-  const requestDeleteRole = (role) => {
+  const requestDeleteRole = async (role) => {
+    let impactedActivities = 0;
+    try {
+      impactedActivities = await countRoleUsageAcrossStages(role.id, role.code);
+    } catch (error) {
+      showToast('error', `No se pudo calcular el impacto del rol: ${getConfirmErrorMessage(error)}`);
+      return;
+    }
     openConfirmDialog({
       title: 'Eliminar Rol',
-      message: `¿Eliminar el rol "${role.code}"? Se eliminará de todas las actividades.`,
+      message: `¿Eliminar el rol "${role.code}"? Esto afectará ${impactedActivities} actividad(es) en todas las etapas.`,
       confirmLabel: 'Sí, eliminar',
       confirmTone: 'danger',
+      successMessage: `Rol "${role.code}" eliminado y ${impactedActivities} actividad(es) actualizadas.`,
       onConfirm: async () => {
         await deleteDoc(doc(db, getRolesColPath(), role.id));
         await removeRoleAcrossStages(role.id, role.code);
       }
     });
   };
+
+  useEffect(() => {
+    if (!isAuthenticated || managementMode !== 'phases') return undefined;
+    const dirtyPhaseIds = phases
+      .map(phase => phase.id)
+      .filter(phaseId => Boolean(getPhaseDraftPayload(phaseId)));
+    if (dirtyPhaseIds.length === 0) return undefined;
+
+    let cancelled = false;
+    const timeoutId = setTimeout(() => {
+      (async () => {
+        let savedCount = 0;
+        for (const phaseId of dirtyPhaseIds) {
+          if (cancelled) break;
+          try {
+            const saved = await persistPhaseDraft(phaseId, { source: 'autosave', notifySuccess: false });
+            if (saved) savedCount += 1;
+          } catch (error) {
+            if (!cancelled) showToast('error', `No se pudo guardar automáticamente una fase: ${getConfirmErrorMessage(error)}`);
+          }
+        }
+        if (!cancelled && savedCount > 0) showToast('success', `Autosave: ${savedCount} fase(s) guardada(s).`);
+      })();
+    }, 1100);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [getConfirmErrorMessage, getPhaseDraftPayload, isAuthenticated, managementMode, persistPhaseDraft, phases, showToast]);
+
+  useEffect(() => {
+    if (!isAuthenticated || managementMode !== 'flows') return undefined;
+    const dirtyFlowIds = flows
+      .map(flow => flow.id)
+      .filter(flowId => Boolean(getFlowDraftPayload(flowId)));
+    if (dirtyFlowIds.length === 0) return undefined;
+
+    let cancelled = false;
+    const timeoutId = setTimeout(() => {
+      (async () => {
+        let savedCount = 0;
+        for (const flowId of dirtyFlowIds) {
+          if (cancelled) break;
+          try {
+            const saved = await persistFlowDraft(flowId, { source: 'autosave', notifySuccess: false });
+            if (saved) savedCount += 1;
+          } catch (error) {
+            if (!cancelled) showToast('error', `No se pudo guardar automáticamente una ruta: ${getConfirmErrorMessage(error)}`);
+          }
+        }
+        if (!cancelled && savedCount > 0) showToast('success', `Autosave: ${savedCount} ruta(s) guardada(s).`);
+      })();
+    }, 1100);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [flows, getConfirmErrorMessage, getFlowDraftPayload, isAuthenticated, managementMode, persistFlowDraft, showToast]);
+
+  useEffect(() => {
+    if (!isAuthenticated || managementMode !== 'roles') return undefined;
+    const rolePayloads = roles
+      .map(role => ({ role, payload: getRoleDraftPayload(role) }))
+      .filter(item => item.payload && !item.payload.duplicatedCode && item.payload.nextCode === item.role.code);
+    if (rolePayloads.length === 0) return undefined;
+
+    let cancelled = false;
+    const timeoutId = setTimeout(() => {
+      (async () => {
+        let savedCount = 0;
+        for (const item of rolePayloads) {
+          if (cancelled) break;
+          try {
+            const saved = await persistRoleDraft(item.role, item.payload, { source: 'autosave', notifySuccess: false });
+            if (saved) savedCount += 1;
+          } catch (error) {
+            if (!cancelled) showToast('error', `No se pudo guardar automáticamente un rol: ${getConfirmErrorMessage(error)}`);
+          }
+        }
+        if (!cancelled && savedCount > 0) showToast('success', `Autosave: ${savedCount} rol(es) guardado(s).`);
+      })();
+    }, 1100);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [getConfirmErrorMessage, getRoleDraftPayload, isAuthenticated, managementMode, persistRoleDraft, roles, showToast]);
 
   const resetForm = () => {
     setIsEditingActivity(null);
@@ -1474,6 +1723,7 @@ export default function App() {
   
   const handleSaveActivity = async () => {
     if (!validateForm()) return;
+    const isEditing = Boolean(isEditingActivity);
     let preds = formData.predecessors;
     if (typeof preds === 'string') { preds = preds.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n)); }
 
@@ -1534,6 +1784,7 @@ export default function App() {
     }
 
     resetForm();
+    showToast('success', isEditing ? 'Actividad actualizada.' : 'Actividad creada.');
   };
 
   const startEdit = (activity) => {
@@ -1626,6 +1877,18 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 font-sans text-slate-800 overflow-hidden relative">
+      {toast.visible && (
+        <div className="fixed top-4 right-4 z-[140]">
+          <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 shadow-xl text-xs font-semibold ${
+            toast.type === 'error'
+              ? 'bg-red-50 border-red-200 text-red-700'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+          }`}>
+            {toast.type === 'error' ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+            <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
       
       {/* --- MODAL DE AUTENTICACIÓN --- */}
       {showAuthModal && (
@@ -1986,13 +2249,14 @@ export default function App() {
                 <button onClick={() => setManagementMode('flows')} className={`flex-1 py-3 text-xs font-bold ${managementMode === 'flows' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>Rutas</button>
                 <button onClick={() => setManagementMode('roles')} className={`flex-1 py-3 text-xs font-bold ${managementMode === 'roles' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>Roles</button>
               </div>
-
               <div className="flex-1 overflow-y-auto p-4">
                 {managementMode === 'phases' && (
                   <div className="space-y-3">
                     {phases.map((phase) => {
                       const draft = phaseDrafts[phase.id] || { title: phase.title || '', color: getPhaseHexColor(phase) };
                       const phaseColor = draft.color || getPhaseHexColor(phase);
+                      const phaseStatusKey = `phase:${phase.id}`;
+                      const phaseStatus = getEntityStatusMeta(phaseStatusKey, isPhaseDirty(phase.id));
                       return (
                       <div key={phase.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-slate-200 flex-shrink-0 cursor-pointer relative shadow-inner">
@@ -2015,9 +2279,13 @@ export default function App() {
                             [phase.id]: { ...(current[phase.id] || { title: phase.title || '', color: getPhaseHexColor(phase) }), title: e.target.value }
                           }))}
                         />
+                        {phaseStatus && (
+                          <span className={`px-2 py-1 rounded-md border text-[10px] font-bold whitespace-nowrap ${phaseStatus.className}`}>
+                            {phaseStatus.label}
+                          </span>
+                        )}
                         <button type="button" onClick={() => movePhaseByStep(phase.id, 'up')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={phases[0]?.id === phase.id} title="Mover arriba"><ChevronUp className="w-4 h-4"/></button>
                         <button type="button" onClick={() => movePhaseByStep(phase.id, 'down')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={phases[phases.length - 1]?.id === phase.id} title="Mover abajo"><ChevronDown className="w-4 h-4"/></button>
-                        <button type="button" onClick={() => savePhaseDraft(phase.id)} className="text-slate-300 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded" title="Guardar cambios de la fase"><Save className="w-4 h-4"/></button>
                         <button type="button" onClick={() => requestDeletePhase(phase.id)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                       </div>
                     )})}
@@ -2028,6 +2296,8 @@ export default function App() {
                   <div className="space-y-3">
                     {flows.map((flow) => {
                       const draft = flowDrafts[flow.id] || { label: flow.label || '', color: flow.color || '#64748b' };
+                      const flowStatusKey = `flow:${flow.id}`;
+                      const flowStatus = getEntityStatusMeta(flowStatusKey, isFlowDirty(flow.id));
                       return (
                       <div key={flow.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-2">
                          <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-slate-200 flex-shrink-0 cursor-pointer relative shadow-inner">
@@ -2050,9 +2320,13 @@ export default function App() {
                              [flow.id]: { ...(current[flow.id] || { label: flow.label || '', color: flow.color || '#64748b' }), label: e.target.value }
                            }))}
                          />
+                         {flowStatus && (
+                           <span className={`px-2 py-1 rounded-md border text-[10px] font-bold whitespace-nowrap ${flowStatus.className}`}>
+                             {flowStatus.label}
+                           </span>
+                         )}
                          <button type="button" onClick={() => moveFlowByStep(flow.id, 'up')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={flows[0]?.id === flow.id} title="Mover arriba"><ChevronUp className="w-4 h-4"/></button>
                          <button type="button" onClick={() => moveFlowByStep(flow.id, 'down')} className="text-slate-300 hover:text-blue-500 p-1.5 hover:bg-blue-50 rounded disabled:opacity-30 disabled:cursor-not-allowed" disabled={flows[flows.length - 1]?.id === flow.id} title="Mover abajo"><ChevronDown className="w-4 h-4"/></button>
-                         <button type="button" onClick={() => saveFlowDraft(flow.id)} className="text-slate-300 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded" title="Guardar cambios de la ruta"><Save className="w-4 h-4"/></button>
                          <button type="button" onClick={() => requestDeleteFlow(flow.id)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                       </div>
                     )})}
@@ -2068,6 +2342,9 @@ export default function App() {
                     {roles.map((role) => {
                       const draft = roleDrafts[role.id] || { name: role.name, code: role.code, color: role.color };
                       const duplicatedCode = roles.some(currentRole => currentRole.id !== role.id && currentRole.code === draft.code);
+                      const roleStatusKey = `role:${role.id}`;
+                      const roleStatus = getEntityStatusMeta(roleStatusKey, isRoleDirty(role));
+                      const roleIsSaving = saveStatusByKey[roleStatusKey]?.status === 'saving';
                       return (
                         <div key={role.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
                           <div className="flex items-center gap-3">
@@ -2101,7 +2378,12 @@ export default function App() {
                             }))}
                             placeholder="Nombre completo del rol"
                           />
-                          <button type="button" onClick={() => saveRoleDraft(role)} className="text-slate-300 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded" title="Guardar rol"><Save className="w-4 h-4"/></button>
+                          {roleStatus && (
+                            <span className={`px-2 py-1 rounded-md border text-[10px] font-bold whitespace-nowrap ${roleStatus.className}`}>
+                              {roleStatus.label}
+                            </span>
+                          )}
+                          <button type="button" disabled={roleIsSaving} onClick={() => saveRoleDraft(role)} className="text-slate-300 hover:text-emerald-600 p-1.5 hover:bg-emerald-50 rounded disabled:opacity-40 disabled:cursor-not-allowed" title="Guardar rol"><Save className="w-4 h-4"/></button>
                           <button type="button" onClick={() => requestDeleteRole(role)} className="text-slate-300 hover:text-red-500 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                         </div>
                         {duplicatedCode && (
